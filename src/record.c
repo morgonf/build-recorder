@@ -195,7 +195,8 @@ record_rename(char *poutname, char *from_foutname, char *to_foutname)
 void
 record_hash(char *foutname, char *hash)
 {
-    record_triple(foutname, "b:hash", hash, true);
+    if (hash != NULL)
+	record_triple(foutname, "b:hash", hash, true);
 }
 
 void

@@ -341,6 +341,12 @@ static void
 handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
 {
     char *abspath = absolutepath(pid, olddirfd, oldpath);
+    if (abspath == NULL) {
+	free(oldpath);
+	pi->entry_info = (void *) (ptrdiff_t) -1;
+	return;
+    }
+
     char *hash = get_file_hash(abspath);
 
     FILE_INFO *f = find_finfo(abspath, hash);
@@ -357,13 +363,16 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
     }
 
     pi->entry_info = (void *) (f - finfo);
-    if (pi->entry_info == NULL)
-	error(EXIT_FAILURE, errno, "on handle_rename_entry absolutepath");
 }
 
 static void
 handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 {
+    if ((ptrdiff_t) pi->entry_info < 0) {
+	free(newpath);
+	return;
+    }
+
     FILE_INFO *from = finfo + (ptrdiff_t) pi->entry_info;
 
     char *abspath = absolutepath(pid, newdirfd, newpath);

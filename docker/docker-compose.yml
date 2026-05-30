@@ -1,0 +1,15 @@
+services:
+  civetweb-demo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - /home/user/hasher-repo/sisyphus/SRPMS.hasher:/srpms:ro
+      - ./output:/output
+    environment:
+      - SRPM=/srpms/civetweb-1.16-alt5.git588860e.src.rpm
+      - OUTPUT_DIR=/output
