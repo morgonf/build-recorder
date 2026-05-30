@@ -20,16 +20,18 @@ RUN autoreconf -i && \
 # Stage 2: demo environment — civetweb build under build-recorder
 FROM registry.altlinux.org/alt/alt:p11
 
-# civetweb BuildRequires + rpmbuild toolchain
+# Build tools: SRPM mode + git mode
 RUN apt-get update -q && \
     apt-get install -y -q \
         rpm-build \
         cmake \
         make \
         gcc-c++ \
+        git \
         libcheck-devel \
         zlib-devel \
         libssl-devel \
+        libsystemd-devel \
         libduktape-devel \
         liblua5.3-devel \
         iproute2 \

@@ -8,8 +8,14 @@ services:
     security_opt:
       - seccomp:unconfined
     volumes:
-      - ${SRPM_DIR:?set SRPM_DIR to the directory containing the .src.rpm}:/srpms:ro
       - ${OUTPUT_DIR:?set OUTPUT_DIR to the host directory for results}:/output
+      # SRPM mode only:
+      - ${SRPM_DIR:-/dev/null}:/srpms:ro
     environment:
-      - SRPM=/srpms/${SRPM_FILE:?set SRPM_FILE to the .src.rpm filename}
       - OUTPUT_DIR=/output
+      # Git mode:
+      - GIT_URL=${GIT_URL:-}
+      - GIT_REF=${GIT_REF:-}
+      - GIT_BUILD_CMD=${GIT_BUILD_CMD:-}
+      # SRPM mode:
+      - SRPM=${SRPM:-}
