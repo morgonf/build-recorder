@@ -38,6 +38,9 @@ RUN apt-get update -q && \
         ctest \
         python3 \
         clang \
+        libcxx-devel \
+        libcxxabi-devel \
+        lld \
         curl \
         unzip \
         zip \
