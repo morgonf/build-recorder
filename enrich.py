@@ -76,45 +76,64 @@ def classify_dep_type(abspath: str, has_rpm: bool) -> str:
     return "system_runtime"
 
 
+def _unescape(s: str) -> str:
+    return (
+        s.replace('\\"', '"')
+        .replace("\\\\", "\\")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+    )
+
+
 def parse_file_abspaths(out_file: Path) -> dict[str, str]:
     """
     Scans the .out file line-by-line to extract {uri: abspath} for all b:file nodes.
-    Avoids full Turtle parsing to stay robust against known format quirks.
+    Handles two formats:
+      - Flat (new): each triple on its own line, subject repeated
+          :f0  a  b:file .
+          :f0  b:abspath  "/path" .
+      - Grouped (old): semicolon-separated predicate blocks
+          :f0 a b:file ;
+              b:abspath "/path" ;
+              ...
     """
-    uri_to_abspath: dict[str, str] = {}
+    file_uris: set[str] = set()
+    abspaths: dict[str, str] = {}
     current_uri: str | None = None
 
-    uri_re = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
-    abspath_re = re.compile(r"^\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
+    file_re      = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
+    abs_direct_re = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
+    abs_indent_re = re.compile(r"^\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
 
     with open(out_file, "r", encoding="utf-8", errors="replace") as fh:
         for raw in fh:
             line = raw.rstrip("\n")
 
-            m = uri_re.match(line)
+            # File type declaration
+            m = file_re.match(line)
             if m:
+                file_uris.add(m.group(1))
                 current_uri = m.group(1)
                 continue
 
-            if current_uri:
-                m = abspath_re.match(line)
-                if m:
-                    raw_path = m.group(1)
-                    abspath = (
-                        raw_path
-                        .replace('\\"', '"')
-                        .replace("\\\\", "\\")
-                        .replace("\\n", "\n")
-                        .replace("\\t", "\t")
-                    )
-                    uri_to_abspath[current_uri] = abspath
-                    continue
+            # Direct abspath (flat format): ":fXX  b:abspath  "..." ."
+            m = abs_direct_re.match(line)
+            if m:
+                abspaths[m.group(1)] = _unescape(m.group(2))
+                current_uri = None
+                continue
 
-                # Non-indented non-comment line → new block started
+            # Indented abspath (grouped format): "    b:abspath "..." ;"
+            if current_uri:
+                m = abs_indent_re.match(line)
+                if m:
+                    abspaths[current_uri] = _unescape(m.group(1))
+                    continue
                 if line and not line[0].isspace() and not line.startswith("#"):
                     current_uri = None
 
-    return uri_to_abspath
+    return {uri: path for uri, path in abspaths.items() if uri in file_uris}
 
 
 def is_already_enriched(out_file: Path) -> bool:
