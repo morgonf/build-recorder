@@ -183,6 +183,47 @@ KNOWN_COMPONENTS: dict[str, ComponentSpec] = {
         osv_name="Mbed-TLS/mbedtls",
         purl_type="github", purl_ns="Mbed-TLS", purl_name="mbedtls",
     ),
+    "wslay": ComponentSpec(
+        display_name="wslay",
+        file_triggers={"wslay.h", "wslay_frame.h", "wslay_event.h", "wslayver.h",
+                       "configure.ac"},
+        dir_re=re.compile(r"wslay[-_](\d+\.\d+[\.\d]*)"),
+        # Version in configure.ac: AC_INIT([wslay], [1.1.1], ...)
+        version_re=re.compile(r'AC_INIT\(\[wslay\],\s*\[([^\]]+)\]'),
+        osv_ecosystem="GitHub",
+        osv_name="tatsuhiro-t/wslay",
+        purl_type="github", purl_ns="tatsuhiro-t", purl_name="wslay",
+        homepage="https://github.com/tatsuhiro-t/wslay",
+    ),
+    "libutp": ComponentSpec(
+        display_name="libutp",
+        file_triggers={"utp.h", "utp_types.h", "utp.cpp"},
+        dir_re=re.compile(r"libutp[-_](\d+\.\d+[\.\d]*)"),
+        osv_ecosystem="GitHub",
+        osv_name="bittorrent/libutp",
+        purl_type="github", purl_ns="bittorrent", purl_name="libutp",
+        homepage="https://github.com/bittorrent/libutp",
+    ),
+    "gtest": ComponentSpec(
+        display_name="Google Test",
+        file_triggers={"gtest.h", "gtest-all.cc"},
+        dir_re=re.compile(r"gtest[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+GTEST_VERSION_\w+\s+(\d+)'),
+        osv_ecosystem="GitHub",
+        osv_name="google/googletest",
+        purl_type="github", purl_ns="google", purl_name="googletest",
+        homepage="https://github.com/google/googletest",
+    ),
+    "rapidjson": ComponentSpec(
+        display_name="RapidJSON",
+        file_triggers={"rapidjson.h", "document.h"},
+        dir_re=re.compile(r"rapidjson[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+RAPIDJSON_VERSION_STRING\s+"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="Tencent/rapidjson",
+        purl_type="github", purl_ns="Tencent", purl_name="rapidjson",
+        homepage="https://rapidjson.org",
+    ),
 }
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -221,6 +262,14 @@ class VendoredComponent:
     @property
     def bom_ref(self) -> str:
         return f"{self.key}-{self.version or 'unknown'}"
+
+
+@dataclass
+class UnknownVendoredDir:
+    """Vendor directory not matched by KNOWN_COMPONENTS — reported but not queried for CVE."""
+    vendor_dir: str
+    file_count: int
+    sample_files: list[str]
 
 # ── Parser: read enriched .out file ──────────────────────────────────────────
 
@@ -331,15 +380,54 @@ def _version_from_dir(dirname: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def detect_unknown_vendored(records: list[FileRecord]) -> list[UnknownVendoredDir]:
+    """
+    Find vendor directories not matched by KNOWN_COMPONENTS.
+    Directories with >= 3 source files are reported for awareness.
+    """
+    known_triggers: set[str] = set()
+    for spec in KNOWN_COMPONENTS.values():
+        known_triggers |= spec.file_triggers
+
+    vendor_files = [r for r in records if r.dep_type == "project_source" and _is_vendor_path(r.abspath)]
+
+    dir_files: dict[str, list[FileRecord]] = defaultdict(list)
+    for r in vendor_files:
+        vdir = _extract_vendor_dir(r.abspath)
+        if vdir:
+            dir_files[vdir].append(r)
+
+    unknown: list[UnknownVendoredDir] = []
+    for vdir, files in dir_files.items():
+        if any(Path(r.abspath).name in known_triggers for r in files):
+            continue
+        dirname = vdir.split("/")[-1]
+        if _version_from_dir(dirname):
+            continue
+        src_files = [r for r in files
+                     if Path(r.abspath).suffix in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')]
+        if len(src_files) >= 3:
+            sample = sorted({Path(r.abspath).name for r in src_files
+                             if Path(r.abspath).suffix in ('.h', '.c', '.cpp')})[:6]
+            unknown.append(UnknownVendoredDir(
+                vendor_dir=vdir,
+                file_count=len(files),
+                sample_files=sample,
+            ))
+    return unknown
+
+
 def detect_vendored_components(records: list[FileRecord]) -> list[VendoredComponent]:
     vendor_files = [r for r in records if r.dep_type == "project_source" and _is_vendor_path(r.abspath)]
 
-    # Group by (component_key, vendor_dir) — multiple versions of same lib may coexist
-    bucket: dict[tuple[str, str], list[FileRecord]] = defaultdict(list)
-    bucket_meta: dict[tuple[str, str], tuple[Optional[str], str, float]] = {}  # → (version, method, conf)
+    # Phase 1: identify which vendor directories contain a known component
+    # Key: (comp_key, vdir) → (version, method, conf)
+    identified: dict[tuple[str, str], tuple[Optional[str], str, float]] = {}
 
     for rec in vendor_files:
         vdir = _extract_vendor_dir(rec.abspath)
+        if not vdir:
+            continue
         dirname = vdir.split("/")[-1]
         fname = Path(rec.abspath).name
 
@@ -352,23 +440,36 @@ def detect_vendored_components(records: list[FileRecord]) -> list[VendoredCompon
             continue
 
         key = (comp_key, vdir)
-        bucket[key].append(rec)
-        if key not in bucket_meta:
+        if key not in identified:
             if dir_match and dir_match[0] == comp_key:
-                bucket_meta[key] = (dir_match[1], "dir_name", 0.9)
+                identified[key] = (dir_match[1], "dir_name", 0.9)
             else:
-                bucket_meta[key] = (None, "unknown", 0.0)
+                identified[key] = (None, "unknown", 0.0)
 
-    # For each component key, pick the vendor_dir with the most compiled files
-    # (heuristic: the most-referenced version was actually built)
-    best: dict[str, tuple[str, list[FileRecord]]] = {}
-    for (comp_key, vdir), files in bucket.items():
+    # Phase 2: assign ALL files in each identified vendor_dir to the component
+    # (not just the trigger files — gives accurate file count)
+    dir_to_comp: dict[str, tuple[str, tuple]] = {}  # vdir → (comp_key, meta)
+    for (comp_key, vdir), meta in identified.items():
+        # If same dir claimed by multiple keys (shouldn't happen), keep first
+        if vdir not in dir_to_comp:
+            dir_to_comp[vdir] = (comp_key, meta)
+
+    dir_all_files: dict[str, list[FileRecord]] = defaultdict(list)
+    for rec in vendor_files:
+        vdir = _extract_vendor_dir(rec.abspath)
+        if vdir in dir_to_comp:
+            dir_all_files[vdir].append(rec)
+
+    # Phase 3: for each component key pick the vdir with most files
+    best: dict[str, tuple[str, list[FileRecord], tuple]] = {}
+    for vdir, (comp_key, meta) in dir_to_comp.items():
+        files = dir_all_files[vdir]
         if comp_key not in best or len(files) > len(best[comp_key][1]):
-            best[comp_key] = (vdir, files)
+            best[comp_key] = (vdir, files, meta)
 
     components = {}
-    for comp_key, (vdir, files) in best.items():
-        version, method, conf = bucket_meta[(comp_key, vdir)]
+    for comp_key, (vdir, files, meta) in best.items():
+        version, method, conf = meta
         components[comp_key] = VendoredComponent(
             key=comp_key,
             spec=KNOWN_COMPONENTS[comp_key],
@@ -383,6 +484,33 @@ def detect_vendored_components(records: list[FileRecord]) -> list[VendoredCompon
 
 # ── Layer 2: version string extraction from source files ──────────────────────
 
+_MULTI_DEFINE_PATTERNS: dict[str, list[re.Pattern]] = {
+    "wslay": [
+        re.compile(r'#\s*define\s+WSLAY_MAJOR_VERSION\s+(\d+)'),
+        re.compile(r'#\s*define\s+WSLAY_MINOR_VERSION\s+(\d+)'),
+        re.compile(r'#\s*define\s+WSLAY_MICRO_VERSION\s+(\d+)'),
+    ],
+    "gtest": [
+        re.compile(r'#\s*define\s+GTEST_MAJOR_VERSION\s+(\d+)'),
+        re.compile(r'#\s*define\s+GTEST_MINOR_VERSION\s+(\d+)'),
+        re.compile(r'#\s*define\s+GTEST_PATCH_VERSION\s+(\d+)'),
+    ],
+}
+
+
+def _extract_multi_define_version(content: str, key: str) -> Optional[str]:
+    """Extract version from multiple #define statements (e.g. MAJOR/MINOR/MICRO)."""
+    patterns = _MULTI_DEFINE_PATTERNS.get(key)
+    if not patterns:
+        return None
+    parts = []
+    for pat in patterns:
+        m = pat.search(content)
+        if m:
+            parts.append(m.group(1))
+    return ".".join(parts) if len(parts) == len(patterns) else None
+
+
 def extract_versions_from_source(
     components: list[VendoredComponent],
     source_dir: Path,
@@ -392,7 +520,7 @@ def extract_versions_from_source(
         if comp.version and comp.version_confidence >= 0.9:
             continue  # already known from dir name
         spec = comp.spec
-        if not spec.version_re:
+        if not spec.version_re and comp.key not in _MULTI_DEFINE_PATTERNS:
             continue
 
         for abspath in comp.source_files:
@@ -402,10 +530,14 @@ def extract_versions_from_source(
             for candidate in candidates:
                 try:
                     content = candidate.read_text(encoding="utf-8", errors="replace")
-                    m = spec.version_re.search(content)
-                    if m:
-                        raw = m.group(1)
-                        version = spec.version_transform(raw) if spec.version_transform else raw
+                    # Try multi-define extraction first
+                    version = _extract_multi_define_version(content, comp.key)
+                    if not version and spec.version_re:
+                        m = spec.version_re.search(content)
+                        if m:
+                            raw = m.group(1)
+                            version = spec.version_transform(raw) if spec.version_transform else raw
+                    if version:
                         comp.version = version
                         comp.version_method = "version_string"
                         comp.version_confidence = 1.0
@@ -625,6 +757,7 @@ def generate_cyclonedx(
 def generate_report(
     components: list[VendoredComponent],
     source_file: Path,
+    unknown_dirs: Optional[list] = None,
 ) -> str:
     lines = []
     W = lines.append
@@ -706,7 +839,16 @@ def generate_report(
               f"(score: {comp.osv_match.get('score', 0):.0%})")
         W("")
 
-    W("---")
+    if unknown_dirs:
+        W("\n## Unrecognised Vendor Directories\n")
+        W("These directories look like vendored third-party code but are not in the "
+          "known-component database. Add them to `KNOWN_COMPONENTS` for CVE tracking.\n")
+        W("| Directory | Files | Sample files |")
+        W("|---|---|---|")
+        for ud in sorted(unknown_dirs, key=lambda d: -d.file_count):
+            W(f"| `{ud.vendor_dir}` | {ud.file_count} | {', '.join(f'`{f}`' for f in ud.sample_files)} |")
+
+    W("\n---")
     W("*Report generated by `sbom.py` / build-recorder*")
     return "\n".join(lines)
 
@@ -746,11 +888,15 @@ def main():
 
     print("Detecting vendored components (Layer 1: path patterns) ...", end=" ", flush=True)
     components = detect_vendored_components(records)
-    print(f"{len(components)} components found")
+    unknown_dirs = detect_unknown_vendored(records)
+    print(f"{len(components)} known + {len(unknown_dirs)} unrecognised vendor dirs")
 
     for comp in components:
         status = f"{comp.version} ({comp.version_method})" if comp.version else "version unknown"
         print(f"  {comp.spec.display_name:20s}  {len(comp.source_files):3d} files  {status}")
+    for ud in unknown_dirs:
+        print(f"  [unknown] {ud.vendor_dir:30s}  {ud.file_count:3d} files  "
+              f"({', '.join(ud.sample_files[:3])})")
 
     if source_dir:
         print(f"\nExtracting version strings from {source_dir} (Layer 2) ...")
@@ -782,14 +928,14 @@ def main():
     sbom_path.write_text(json.dumps(sbom, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(f"Generating Markdown report → {report_path}")
-    report = generate_report(components, out_file)
+    report = generate_report(components, out_file, unknown_dirs)
     report_path.write_text(report, encoding="utf-8")
 
     total_cves = sum(len(c.cves) for c in components)
     critical = sum(1 for c in components for v in c.cves
                    if _osv_severity(v)[0] in ("critical", "high"))
     print(f"\n=== Done ===")
-    print(f"  Components : {len(components)}")
+    print(f"  Components : {len(components)} known + {len(unknown_dirs)} unrecognised")
     print(f"  With version: {sum(1 for c in components if c.version)}/{len(components)}")
     print(f"  CVEs found : {total_cves} ({critical} critical/high)")
     print(f"  SBOM       : {sbom_path}")
