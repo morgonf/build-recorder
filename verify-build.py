@@ -347,10 +347,8 @@ def _group_by_package(files: list[FileNode]) -> dict[str, list[FileNode]]:
 
 
 def _status(f: FileNode) -> str:
-    if f.is_from_rpm:
-        return "✓"
-    if f.is_vendored:
-        return "⚠ vendored"
+    if f.is_from_rpm:    return "✓"
+    if f.is_vendored:    return "⚠"
     return "·"
 
 # ── Console report ────────────────────────────────────────────────────────────
