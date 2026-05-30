@@ -35,7 +35,8 @@ RUN apt-get update -q && \
         libduktape-devel \
         liblua5.3-devel \
         iproute2 \
-        ctest && \
+        ctest \
+        python3 && \
     apt-get clean
 
 COPY --from=builder /src/build-recorder /usr/local/bin/build-recorder

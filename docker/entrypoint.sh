@@ -70,6 +70,13 @@ build_from_git() {
     echo "    Files    : $(grep -c 'a.*b:file' "$output_file" 2>/dev/null || echo 0)"
     echo "    Size     : $(du -sh "$output_file" | cut -f1)"
     echo ""
+    echo "=== Exporting RPM package database ==="
+    local rpm_dump="${OUTPUT_DIR}/rpm-dump.txt"
+    rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]' 2>/dev/null > "$rpm_dump"
+    echo "    Packages : $(rpm -qa | wc -l)"
+    echo "    Entries  : $(wc -l < "$rpm_dump")"
+    echo "    Dump     : $rpm_dump"
+    echo ""
     echo "Output: $output_file"
 }
 
@@ -120,6 +127,13 @@ build_from_srpm() {
     echo "    Processes: $(grep -c 'a.*b:process' "$output_file" 2>/dev/null || echo 0)"
     echo "    Files    : $(grep -c 'a.*b:file' "$output_file" 2>/dev/null || echo 0)"
     echo "    Size     : $(du -sh "$output_file" | cut -f1)"
+    echo ""
+    echo "=== Exporting RPM package database ==="
+    local rpm_dump="${OUTPUT_DIR}/rpm-dump.txt"
+    rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]' 2>/dev/null > "$rpm_dump"
+    echo "    Packages : $(rpm -qa | wc -l)"
+    echo "    Entries  : $(wc -l < "$rpm_dump")"
+    echo "    Dump     : $rpm_dump"
     echo ""
     echo "Output: $output_file"
 }

@@ -26,6 +26,7 @@ build-report.py — автономный анализатор файлов build
     libs       — собранные библиотеки (.so, .a)
     tree       — дерево процессов
     headers    — топ системных заголовков
+    packages   — пакетные зависимости (требует enrich.py)
     report     — полный Markdown-отчёт
 """
 
@@ -345,6 +346,58 @@ def tree(g: rdflib.Graph):
             print(f"       … и ещё {len(children) - 6}")
 
 
+def packages(g: rdflib.Graph):
+    section("Пакетные зависимости (данные enrich.py)")
+
+    check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
+    if not check or int(check[0][0]) == 0:
+        print("\n  Данные о пакетах недоступны.")
+        print("  Запустите: python3 enrich.py <build.out> <rpm-dump.txt>")
+        return
+
+    print("\n  По типу зависимости:")
+    rows = q(g, """
+        SELECT ?dep_type (COUNT(DISTINCT ?file) AS ?n)
+        WHERE { ?file b:dep_type ?dep_type }
+        GROUP BY ?dep_type ORDER BY DESC(?n)
+    """)
+    for (dep_type, n) in rows:
+        trow(str(dep_type), n)
+
+    print("\n  Пакеты, участвующие в сборке (по числу файлов):")
+    rows = q(g, """
+        SELECT ?rpm_name (COUNT(DISTINCT ?file) AS ?n)
+        WHERE { ?file b:rpm_name ?rpm_name }
+        GROUP BY ?rpm_name ORDER BY DESC(?n)
+    """)
+    for (name, n) in rows:
+        trow(str(name), f"{n} файлов", w=40)
+
+    dyn = q(g, """
+        SELECT DISTINCT ?path ?rpm_name WHERE {
+            ?file b:abspath ?path ; b:dep_type "dynamic_lib" .
+            OPTIONAL { ?file b:rpm_name ?rpm_name }
+        } ORDER BY ?path
+    """)
+    if dyn:
+        print(f"\n  Динамические библиотеки .so ({len(dyn)}):")
+        for (path, name) in dyn:
+            pkg = str(name) if name else "—"
+            trow(str(path).split("/")[-1], f"[{pkg}]", w=44)
+
+    arc = q(g, """
+        SELECT DISTINCT ?path ?rpm_name WHERE {
+            ?file b:abspath ?path ; b:dep_type "static_archive" .
+            OPTIONAL { ?file b:rpm_name ?rpm_name }
+        } ORDER BY ?path
+    """)
+    if arc:
+        print(f"\n  Статические архивы .a ({len(arc)}):")
+        for (path, name) in arc:
+            pkg = str(name) if name else "—"
+            trow(str(path).split("/")[-1], f"[{pkg}]", w=44)
+
+
 def headers(g: rdflib.Graph):
     section("Наиболее читаемые системные заголовки")
     rows = q(g, """
@@ -517,6 +570,62 @@ def generate_report(g: rdflib.Graph, src_path: Path) -> str:
             h = str(hash_) if hash_ else '—'
             W(f"| `{str(path).split('/')[-1]}` | `{h}` |")
 
+    # ── Package provenance (if enrich.py was run) ──
+    pkg_check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
+    if pkg_check and int(pkg_check[0][0]) > 0:
+        W("\n## Пакетные зависимости\n")
+        W("*Данные добавлены `enrich.py` на основе RPM-базы контейнера.*\n")
+
+        dep_rows = q(g, """
+            SELECT ?dep_type (COUNT(DISTINCT ?file) AS ?n)
+            WHERE { ?file b:dep_type ?dep_type }
+            GROUP BY ?dep_type ORDER BY DESC(?n)
+        """)
+        W("### По типу зависимости\n")
+        W("| Тип | Файлов |")
+        W("|-----|--------|")
+        for (dep_type, n) in dep_rows:
+            W(f"| `{dep_type}` | {n} |")
+
+        pkg_rows = q(g, """
+            SELECT ?rpm_name (COUNT(DISTINCT ?file) AS ?n)
+            WHERE { ?file b:rpm_name ?rpm_name }
+            GROUP BY ?rpm_name ORDER BY DESC(?n)
+        """)
+        W("\n### Пакеты\n")
+        W("| Пакет | Файлов |")
+        W("|-------|--------|")
+        for (name, n) in pkg_rows:
+            W(f"| `{name}` | {n} |")
+
+        dyn_rows = q(g, """
+            SELECT DISTINCT ?path ?rpm_name WHERE {
+                ?file b:abspath ?path ; b:dep_type "dynamic_lib" .
+                OPTIONAL { ?file b:rpm_name ?rpm_name }
+            } ORDER BY ?path
+        """)
+        if dyn_rows:
+            W(f"\n### Динамические библиотеки ({len(dyn_rows)})\n")
+            W("| Библиотека | Пакет |")
+            W("|-----------|-------|")
+            for (path, name) in dyn_rows:
+                pkg = str(name) if name else "—"
+                W(f"| `{str(path).split('/')[-1]}` | `{pkg}` |")
+
+        arc_rows = q(g, """
+            SELECT DISTINCT ?path ?rpm_name WHERE {
+                ?file b:abspath ?path ; b:dep_type "static_archive" .
+                OPTIONAL { ?file b:rpm_name ?rpm_name }
+            } ORDER BY ?path
+        """)
+        if arc_rows:
+            W(f"\n### Статические архивы ({len(arc_rows)})\n")
+            W("| Архив | Пакет |")
+            W("|-------|-------|")
+            for (path, name) in arc_rows:
+                pkg = str(name) if name else "—"
+                W(f"| `{str(path).split('/')[-1]}` | `{pkg}` |")
+
     W("\n---\n")
     W(f"*Отчёт сгенерирован `build-report.py` на основе данных `build-recorder`*")
     return "\n".join(lines)
@@ -534,6 +643,7 @@ AVAILABLE = {
     "libs":      libs,
     "tree":      tree,
     "headers":   headers,
+    "packages":  packages,
 }
 
 def main():

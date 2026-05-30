@@ -97,3 +97,28 @@ b:executable a rdf:Property ;
     rdfs:domain b:process ;
     rdfs:range b:file ;
     rdfs:comment "Indicates that a process is an executable file." .
+
+b:rename a rdf:Property ;
+    rdfs:label "Rename" ;
+    rdfs:domain b:process ;
+    rdfs:range b:file ;
+    rdfs:comment "Indicates that a process renamed a file." .
+
+# Package provenance (added by enrich.py post-processing)
+b:rpm_package a rdf:Property ;
+    rdfs:label "RPM package (NEVRA)" ;
+    rdfs:domain b:file ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Full RPM package identifier (NAME-VERSION-RELEASE.ARCH) that provides this file." .
+
+b:rpm_name a rdf:Property ;
+    rdfs:label "RPM package name" ;
+    rdfs:domain b:file ;
+    rdfs:range xsd:string ;
+    rdfs:comment "RPM package name without version, e.g. openssl-devel." .
+
+b:dep_type a rdf:Property ;
+    rdfs:label "Dependency type" ;
+    rdfs:domain b:file ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Role of this file in the build: static_header, dynamic_lib, static_archive, build_tool, project_source, system_runtime, unknown." .
