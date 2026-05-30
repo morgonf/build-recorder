@@ -256,9 +256,14 @@ def sources(g: rdflib.Graph):
                 STRENDS(STR(?path),".c")  || STRENDS(STR(?path),".cpp") ||
                 STRENDS(STR(?path),".cc")
             )
-            FILTER(CONTAINS(STR(?path), "/BUILD/"))
             FILTER(!CONTAINS(STR(?path), "CMakeFiles"))
             FILTER(!CONTAINS(STR(?path), "TryCompile"))
+            FILTER(!CONTAINS(STR(?path), "conftest"))
+            FILTER(
+                CONTAINS(STR(?path), "/BUILD/") ||
+                CONTAINS(STR(?path), "/build/src/") ||
+                CONTAINS(STR(?path), "/src/")
+            )
         }
         ORDER BY ?path
     """)
@@ -266,7 +271,7 @@ def sources(g: rdflib.Graph):
     for (path,) in rows:
         p = str(path)
         if not base:
-            m = re.search(r'/BUILD/[^/]+/', p)
+            m = re.search(r'/BUILD/[^/]+/|/build/src/', p)
             base = p[:m.end()] if m else ""
     print(f"\n  Всего: {len(rows)} файлов")
     for (path,) in rows:
