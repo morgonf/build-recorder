@@ -39,7 +39,7 @@ echo "    Output  : $OUTPUT_FILE"
 echo ""
 
 build-recorder -o "$OUTPUT_FILE" \
-    rpmbuild --nodeps --define '_allow_root_build 1' -bb "$SPEC"
+    rpmbuild --nodeps --define '_allow_root_build 1' -bc "$SPEC"
 
 echo ""
 echo "=== Build complete ==="
