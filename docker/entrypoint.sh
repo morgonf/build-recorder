@@ -138,9 +138,42 @@ build_from_srpm() {
     echo "Output: $output_file"
 }
 
+# ── Экспорт собранных бинарей для CVE-анализа ────────────────────────────────
+
+export_binaries() {
+    local search_root="$1"
+    local bin_dir="${OUTPUT_DIR}/binaries"
+    mkdir -p "$bin_dir"
+
+    local count=0
+    # Collect .so.X.Y.Z versioned shared libraries and executables from build tree
+    while IFS= read -r f; do
+        local dest="${bin_dir}/$(basename "$f")"
+        # Avoid overwriting with duplicate basenames (keep first/largest)
+        if [[ ! -e "$dest" ]] || [[ $(stat -c%s "$f") -gt $(stat -c%s "$dest") ]]; then
+            cp "$f" "$dest" 2>/dev/null && count=$((count + 1)) || true
+        fi
+    done < <(find "$search_root" -maxdepth 8 \
+        \( -name "*.so.*" -o -name "*.a" \) \
+        -not -name "*.py" -not -name "*.cmake" \
+        -not -path "*/CMakeFiles/*" \
+        2>/dev/null | sort)
+
+    echo "=== Exporting binaries for CVE scanning ==="
+    echo "    Count    : $count files"
+    echo "    Dir      : $bin_dir"
+    echo ""
+}
+
 # ── Запуск ────────────────────────────────────────────────────────────────────
 
 case "$MODE" in
-    git)  build_from_git  ;;
-    srpm) build_from_srpm ;;
+    git)
+        build_from_git
+        export_binaries /build/src
+        ;;
+    srpm)
+        build_from_srpm
+        export_binaries /root/RPM/BUILD
+        ;;
 esac
