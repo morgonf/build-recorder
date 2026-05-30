@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+"""
+sbom.py — SBOM and CVE report for vendored C/C++ dependencies in build-recorder output.
+
+Reads an enriched .out file (after enrich.py) and identifies third-party libraries
+that were statically compiled into the project. Works in three modes:
+
+  Offline (default):  path pattern matching + known component database
+  + --source-dir:     version string extraction from source files
+  + --osv-api:        OSV determineversion API + CVE lookup (requires internet)
+
+Output:
+  <build>.sbom.json      CycloneDX 1.6 SBOM
+  <build>.sbom-report.md Human-readable CVE report
+
+Usage:
+  python3 sbom.py civetweb-build.out
+  python3 sbom.py civetweb-build.out --source-dir /path/to/src --osv-api
+  python3 sbom.py civetweb-build.out -o sbom.json --report report.md
+
+See: doc/sbom-vendored-deps.md for full design documentation.
+"""
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+import urllib.error
+import urllib.request
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+# ── Vendor directory patterns ─────────────────────────────────────────────────
+
+VENDOR_DIRS = {
+    "third_party", "thirdparty", "3rdparty",
+    "vendor", "vendors",
+    "external", "externals", "extern",
+    "deps", "dependencies",
+    "contrib", "bundled", "embedded",
+}
+
+# ── Known component database ──────────────────────────────────────────────────
+
+@dataclass
+class ComponentSpec:
+    display_name: str
+    file_triggers: set = field(default_factory=set)
+    dir_re: Optional[re.Pattern] = None
+    version_re: Optional[re.Pattern] = None
+    version_transform: Optional[object] = None  # callable(str) -> str
+    osv_ecosystem: str = ""
+    osv_name: str = ""
+    purl_type: str = "generic"
+    purl_ns: str = ""
+    purl_name: str = ""
+    homepage: str = ""
+
+
+def _duk_version(v: str) -> str:
+    n = int(v)
+    return f"{n // 10000}.{(n % 10000) // 100}.{n % 100}"
+
+
+KNOWN_COMPONENTS: dict[str, ComponentSpec] = {
+    "luafilesystem": ComponentSpec(
+        display_name="LuaFileSystem",
+        file_triggers={"lfs.c", "lfs.h"},
+        version_re=re.compile(r'#\s*define\s+LFS_VERSION\s+"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="lunarmodules/luafilesystem",
+        purl_type="github", purl_ns="lunarmodules", purl_name="luafilesystem",
+        homepage="https://github.com/lunarmodules/luafilesystem",
+    ),
+    "sqlite": ComponentSpec(
+        display_name="SQLite",
+        file_triggers={"sqlite3.c", "sqlite3.h"},
+        dir_re=re.compile(r"sqlite[3-]?[-_](\d[\d.]*)"),
+        version_re=re.compile(r'#\s*define\s+SQLITE_VERSION\s+"([^"]+)"'),
+        # OSV lacks a reliable ecosystem for upstream SQLite; query via binary scan
+        # with cve-bin-tool instead: cve-bin-tool libcivetweb.so
+        osv_ecosystem="",
+        osv_name="",
+        purl_type="generic", purl_ns="", purl_name="sqlite",
+        homepage="https://sqlite.org",
+    ),
+    "lua": ComponentSpec(
+        display_name="Lua",
+        file_triggers={"lua.h", "lualib.h", "lauxlib.h"},
+        dir_re=re.compile(r"lua[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+LUA_RELEASE\s+"Lua ([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="lua/lua",
+        purl_type="github", purl_ns="lua", purl_name="lua",
+        homepage="https://www.lua.org",
+    ),
+    "duktape": ComponentSpec(
+        display_name="Duktape",
+        file_triggers={"duktape.c", "duktape.h", "duk_config.h"},
+        dir_re=re.compile(r"duktape[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+DUK_VERSION\s+(\d+)'),
+        version_transform=_duk_version,
+        osv_ecosystem="GitHub",
+        osv_name="svaarala/duktape",
+        purl_type="github", purl_ns="svaarala", purl_name="duktape",
+        homepage="https://duktape.org",
+    ),
+    "lsqlite3": ComponentSpec(
+        display_name="lsqlite3",
+        file_triggers={"lsqlite3.c"},
+        version_re=re.compile(r'VERSION\s*=\s*"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="LuaDist/lsqlite3",
+        purl_type="github", purl_ns="LuaDist", purl_name="lsqlite3",
+        homepage="https://github.com/LuaDist/lsqlite3",
+    ),
+    "luaxml": ComponentSpec(
+        display_name="LuaXML",
+        file_triggers={"LuaXML_lib.c", "LuaXML_lib.h", "LuaXML.lua"},
+        osv_ecosystem="GitHub",
+        osv_name="LuaDist/luaxml",
+        purl_type="github", purl_ns="LuaDist", purl_name="luaxml",
+        homepage="https://github.com/LuaDist/luaxml",
+    ),
+    "lua_struct": ComponentSpec(
+        display_name="lua-struct",
+        file_triggers={"lua_struct.c"},
+        osv_ecosystem="GitHub",
+        osv_name="iamclint/lua-struct",
+        purl_type="github", purl_ns="iamclint", purl_name="lua-struct",
+    ),
+    "expat": ComponentSpec(
+        display_name="Expat",
+        file_triggers={"expat.h", "xmlparse.c", "xmltok.c"},
+        dir_re=re.compile(r"expat[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+XML_MAJOR_VERSION\s+(\d+)'),
+        osv_ecosystem="GitHub",
+        osv_name="libexpat/libexpat",
+        purl_type="github", purl_ns="libexpat", purl_name="libexpat",
+    ),
+    "zlib": ComponentSpec(
+        display_name="zlib",
+        file_triggers={"zlib.h", "inflate.c", "deflate.c"},
+        dir_re=re.compile(r"zlib[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+ZLIB_VERSION\s+"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="madler/zlib",
+        purl_type="github", purl_ns="madler", purl_name="zlib",
+    ),
+    "libpng": ComponentSpec(
+        display_name="libpng",
+        file_triggers={"png.h", "png.c", "pngconf.h"},
+        version_re=re.compile(r'#\s*define\s+PNG_LIBPNG_VER_STRING\s+"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="pnggroup/libpng",
+        purl_type="github", purl_ns="pnggroup", purl_name="libpng",
+    ),
+    "cjson": ComponentSpec(
+        display_name="cJSON",
+        file_triggers={"cJSON.c", "cJSON.h"},
+        version_re=re.compile(r'#\s*define\s+CJSON_VERSION_MAJOR\s+(\d+)'),
+        osv_ecosystem="GitHub",
+        osv_name="DaveGamble/cJSON",
+        purl_type="github", purl_ns="DaveGamble", purl_name="cJSON",
+    ),
+    "jsmn": ComponentSpec(
+        display_name="jsmn",
+        file_triggers={"jsmn.c", "jsmn.h"},
+        osv_ecosystem="GitHub",
+        osv_name="zserge/jsmn",
+        purl_type="github", purl_ns="zserge", purl_name="jsmn",
+    ),
+    "mbedtls": ComponentSpec(
+        display_name="Mbed TLS",
+        file_triggers={"ssl.h", "aes.h", "sha256.c"},
+        dir_re=re.compile(r"mbedtls[-_](\d+\.\d+[\.\d]*)"),
+        version_re=re.compile(r'#\s*define\s+MBEDTLS_VERSION_STRING\s+"([^"]+)"'),
+        osv_ecosystem="GitHub",
+        osv_name="Mbed-TLS/mbedtls",
+        purl_type="github", purl_ns="Mbed-TLS", purl_name="mbedtls",
+    ),
+}
+
+# ── Data structures ───────────────────────────────────────────────────────────
+
+@dataclass
+class FileRecord:
+    uri: str
+    abspath: str
+    git_hash: str
+    dep_type: str
+
+
+@dataclass
+class VendoredComponent:
+    key: str
+    spec: ComponentSpec
+    version: Optional[str]
+    version_method: str          # "dir_name" | "version_string" | "osv_api" | "unknown"
+    version_confidence: float    # 0.0 – 1.0
+    source_files: list[str]      # abspaths of compiled files
+    vendor_dir: str
+    osv_match: Optional[dict] = None
+    cves: list[dict] = field(default_factory=list)
+
+    @property
+    def purl(self) -> str:
+        spec = self.spec
+        ver = f"@{self.version}" if self.version else ""
+        if spec.purl_type == "github":
+            return f"pkg:github/{spec.purl_ns}/{spec.purl_name}{ver}"
+        if spec.purl_type == "generic":
+            ns = f"/{spec.purl_ns}" if spec.purl_ns else ""
+            return f"pkg:generic{ns}/{spec.purl_name}{ver}"
+        return f"pkg:{spec.purl_type}/{spec.purl_name}{ver}"
+
+    @property
+    def bom_ref(self) -> str:
+        return f"{self.key}-{self.version or 'unknown'}"
+
+# ── Parser: read enriched .out file ──────────────────────────────────────────
+
+def parse_file_records(out_file: Path) -> list[FileRecord]:
+    """Extract all file nodes with uri, abspath, hash, dep_type from .out.
+
+    Handles two formats produced by build-recorder + enrich.py:
+      Flat (original):  :fN  b:prop  "value" .   (one triple per line)
+      Grouped (enrich): :fN\n    b:prop "value" ; (bare URI + indented block)
+    """
+    records: dict[str, dict] = {}
+    file_uris: set[str] = set()
+
+    file_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
+    prop_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
+    iline_re = re.compile(r"^\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
+    bare_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s*$")   # enrichment format: bare URI line
+    current  = None
+
+    with open(out_file, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+
+            # File type declaration
+            m = file_re.match(line)
+            if m:
+                current = m.group(1)
+                file_uris.add(current)
+                records.setdefault(current, {})
+                continue
+
+            # Direct triple (flat format): :fN  b:prop  "value" .
+            m = prop_re.match(line)
+            if m:
+                uri, prop, val = m.group(1), m.group(2), m.group(3)
+                if prop in ("abspath", "hash", "dep_type", "rpm_name", "rpm_package"):
+                    records.setdefault(uri, {})[prop] = _unescape(val)
+                current = None
+                continue
+
+            # Bare URI line — enrichment block header (e.g. ":f0" alone)
+            m = bare_re.match(line)
+            if m:
+                current = m.group(1)
+                records.setdefault(current, {})
+                continue
+
+            # Indented triple (grouped/enrichment format)
+            if current:
+                m = iline_re.match(line)
+                if m:
+                    prop, val = m.group(1), m.group(2)
+                    if prop in ("abspath", "hash", "dep_type", "rpm_name", "rpm_package"):
+                        records.setdefault(current, {})[prop] = _unescape(val)
+                    continue
+                if line and not line[0].isspace() and not line.startswith("#"):
+                    current = None
+
+    result = []
+    for uri in file_uris:
+        d = records.get(uri, {})
+        if "abspath" in d:
+            result.append(FileRecord(
+                uri=uri,
+                abspath=d["abspath"],
+                git_hash=d.get("hash", ""),
+                dep_type=d.get("dep_type", ""),
+            ))
+    return result
+
+
+def _unescape(s: str) -> str:
+    return s.replace('\\"', '"').replace("\\\\", "\\").replace("\\n", "\n").replace("\\t", "\t")
+
+# ── Layer 1: path-based component detection ───────────────────────────────────
+
+def _is_vendor_path(abspath: str) -> bool:
+    parts = abspath.lower().replace("\\", "/").split("/")
+    return any(p in VENDOR_DIRS for p in parts)
+
+
+def _extract_vendor_dir(abspath: str) -> str:
+    """Return the vendor subdirectory (e.g. 'third_party/lua-5.3.6')."""
+    parts = abspath.replace("\\", "/").split("/")
+    for i, p in enumerate(parts):
+        if p.lower() in VENDOR_DIRS:
+            # include one more level if it looks like a component dir
+            if i + 1 < len(parts):
+                return "/".join(parts[i:i+2])
+            return parts[i]
+    return ""
+
+
+def _match_component_by_file(filename: str) -> Optional[str]:
+    for key, spec in KNOWN_COMPONENTS.items():
+        if filename in spec.file_triggers:
+            return key
+    return None
+
+
+def _version_from_dir(dirname: str) -> Optional[tuple[str, str]]:
+    """Try all dir_re patterns, return (component_key, version) or None."""
+    for key, spec in KNOWN_COMPONENTS.items():
+        if spec.dir_re:
+            m = spec.dir_re.search(dirname)
+            if m:
+                return key, m.group(1)
+    return None
+
+
+def detect_vendored_components(records: list[FileRecord]) -> list[VendoredComponent]:
+    vendor_files = [r for r in records if r.dep_type == "project_source" and _is_vendor_path(r.abspath)]
+
+    # Group by (component_key, vendor_dir) — multiple versions of same lib may coexist
+    bucket: dict[tuple[str, str], list[FileRecord]] = defaultdict(list)
+    bucket_meta: dict[tuple[str, str], tuple[Optional[str], str, float]] = {}  # → (version, method, conf)
+
+    for rec in vendor_files:
+        vdir = _extract_vendor_dir(rec.abspath)
+        dirname = vdir.split("/")[-1]
+        fname = Path(rec.abspath).name
+
+        comp_key = _match_component_by_file(fname)
+        dir_match = _version_from_dir(dirname)
+
+        if not comp_key and dir_match:
+            comp_key = dir_match[0]
+        if not comp_key:
+            continue
+
+        key = (comp_key, vdir)
+        bucket[key].append(rec)
+        if key not in bucket_meta:
+            if dir_match and dir_match[0] == comp_key:
+                bucket_meta[key] = (dir_match[1], "dir_name", 0.9)
+            else:
+                bucket_meta[key] = (None, "unknown", 0.0)
+
+    # For each component key, pick the vendor_dir with the most compiled files
+    # (heuristic: the most-referenced version was actually built)
+    best: dict[str, tuple[str, list[FileRecord]]] = {}
+    for (comp_key, vdir), files in bucket.items():
+        if comp_key not in best or len(files) > len(best[comp_key][1]):
+            best[comp_key] = (vdir, files)
+
+    components = {}
+    for comp_key, (vdir, files) in best.items():
+        version, method, conf = bucket_meta[(comp_key, vdir)]
+        components[comp_key] = VendoredComponent(
+            key=comp_key,
+            spec=KNOWN_COMPONENTS[comp_key],
+            version=version,
+            version_method=method,
+            version_confidence=conf,
+            source_files=[r.abspath for r in files],
+            vendor_dir=vdir,
+        )
+
+    return list(components.values())
+
+# ── Layer 2: version string extraction from source files ──────────────────────
+
+def extract_versions_from_source(
+    components: list[VendoredComponent],
+    source_dir: Path,
+) -> None:
+    """Update version in-place for components where source files are readable."""
+    for comp in components:
+        if comp.version and comp.version_confidence >= 0.9:
+            continue  # already known from dir name
+        spec = comp.spec
+        if not spec.version_re:
+            continue
+
+        for abspath in comp.source_files:
+            # Map container path to host path via source_dir heuristic
+            fname = Path(abspath).name
+            candidates = list(source_dir.rglob(fname))
+            for candidate in candidates:
+                try:
+                    content = candidate.read_text(encoding="utf-8", errors="replace")
+                    m = spec.version_re.search(content)
+                    if m:
+                        raw = m.group(1)
+                        version = spec.version_transform(raw) if spec.version_transform else raw
+                        comp.version = version
+                        comp.version_method = "version_string"
+                        comp.version_confidence = 1.0
+                        break
+                except OSError:
+                    continue
+            if comp.version_confidence == 1.0:
+                break
+
+# ── Layer 3: OSV determineversion API ─────────────────────────────────────────
+
+def _plain_sha1(filepath: Path) -> str:
+    h = hashlib.sha1()
+    h.update(filepath.read_bytes())
+    return h.hexdigest()
+
+
+def query_osv_determineversion(
+    comp: VendoredComponent,
+    source_dir: Path,
+) -> None:
+    """Call OSV determineversion API using plain SHA-1 of source files."""
+    file_hashes = []
+    for abspath in comp.source_files[:20]:   # API limit: reasonable subset
+        fname = Path(abspath).name
+        candidates = list(source_dir.rglob(fname))
+        if candidates:
+            try:
+                fhash = _plain_sha1(candidates[0])
+                rel = str(candidates[0].relative_to(source_dir))
+                file_hashes.append({"file_path": rel, "hash": fhash})
+            except OSError:
+                continue
+
+    if not file_hashes:
+        return
+
+    payload = json.dumps({
+        "name": comp.spec.display_name,
+        "file_hashes": file_hashes,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            "https://api.osv.dev/v1experimental/determineversion",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        print(f"  [OSV determineversion] {comp.key}: {e}", file=sys.stderr)
+        return
+
+    matches = data.get("matches", [])
+    if not matches:
+        return
+
+    best = max(matches, key=lambda m: m.get("score", 0))
+    score = best.get("score", 0)
+    repo_info = best.get("repo_info", {})
+    api_version = repo_info.get("version") or repo_info.get("tag", "").lstrip("v")
+
+    comp.osv_match = best
+    if api_version and (comp.version is None or comp.version_confidence < score):
+        comp.version = api_version
+        comp.version_method = "osv_api"
+        comp.version_confidence = score
+
+# ── Layer 4: OSV CVE query ────────────────────────────────────────────────────
+
+def query_osv_cves(comp: VendoredComponent) -> None:
+    """Query OSV /v1/query for vulnerabilities."""
+    if not comp.version and not comp.spec.osv_name:
+        return
+
+    # Build query by PURL if possible, otherwise by package name
+    if comp.version and comp.spec.purl_type in ("github",):
+        payload: dict = {"package": {"purl": comp.purl}}
+    elif comp.spec.osv_name and comp.version:
+        pkg: dict = {"name": comp.spec.osv_name}
+        if comp.spec.osv_ecosystem:
+            pkg["ecosystem"] = comp.spec.osv_ecosystem
+        payload = {"version": comp.version, "package": pkg}
+    else:
+        return
+
+    try:
+        req = urllib.request.Request(
+            "https://api.osv.dev/v1/query",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        print(f"  [OSV query] {comp.key}: {e}", file=sys.stderr)
+        return
+
+    comp.cves = data.get("vulns", [])
+
+# ── CycloneDX SBOM generation ─────────────────────────────────────────────────
+
+SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "NONE": 4, "UNKNOWN": 5}
+
+
+def _osv_severity(vuln: dict) -> tuple[str, float]:
+    for sev in vuln.get("severity", []):
+        score_type = sev.get("type", "")
+        score_val = sev.get("score", "")
+        if score_type in ("CVSS_V3", "CVSS_V4") and score_val:
+            try:
+                score = float(score_val)
+                if score >= 9.0:
+                    return "critical", score
+                if score >= 7.0:
+                    return "high", score
+                if score >= 4.0:
+                    return "medium", score
+                return "low", score
+            except ValueError:
+                pass
+    return "unknown", 0.0
+
+
+def generate_cyclonedx(
+    components: list[VendoredComponent],
+    source_file: Path,
+) -> dict:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cdx_components = []
+    cdx_vulns = []
+
+    for comp in components:
+        spec = comp.spec
+        evidence_methods = []
+        if comp.version_method == "dir_name":
+            evidence_methods.append({"technique": "filename", "confidence": comp.version_confidence,
+                                     "value": comp.vendor_dir})
+        elif comp.version_method == "version_string":
+            evidence_methods.append({"technique": "source-code-analysis",
+                                     "confidence": comp.version_confidence})
+        elif comp.version_method == "osv_api":
+            evidence_methods.append({"technique": "hash-comparison",
+                                     "confidence": comp.version_confidence})
+
+        c: dict = {
+            "type": "library",
+            "bom-ref": comp.bom_ref,
+            "name": spec.display_name,
+            "scope": "required",
+            "evidence": {
+                "identity": {
+                    "field": "version" if comp.version else "name",
+                    "confidence": comp.version_confidence,
+                    "methods": evidence_methods,
+                }
+            },
+            "properties": [
+                {"name": "build-recorder:vendorDir", "value": comp.vendor_dir},
+                {"name": "build-recorder:sourceFiles",
+                 "value": str(len(comp.source_files))},
+                {"name": "build-recorder:versionMethod", "value": comp.version_method},
+            ],
+        }
+        if comp.version:
+            c["version"] = comp.version
+        c["purl"] = comp.purl
+        if spec.homepage:
+            c["externalReferences"] = [{"type": "website", "url": spec.homepage}]
+        cdx_components.append(c)
+
+        for vuln in comp.cves:
+            vid = vuln.get("id", "UNKNOWN")
+            severity, score = _osv_severity(vuln)
+            entry: dict = {
+                "bom-ref": vid,
+                "id": vid,
+                "source": {"name": "OSV", "url": f"https://osv.dev/vulnerability/{vid}"},
+                "affects": [{"ref": comp.bom_ref}],
+                "ratings": [{"severity": severity, "score": score, "method": "CVSSv3"}],
+            }
+            aliases = vuln.get("aliases", [])
+            cve_aliases = [a for a in aliases if a.startswith("CVE-")]
+            if cve_aliases:
+                entry["id"] = cve_aliases[0]
+                entry["references"] = [{"id": a, "source": {"name": "NVD"}} for a in cve_aliases]
+            summary = vuln.get("summary", "")
+            if summary:
+                entry["description"] = summary
+            cdx_vulns.append(entry)
+
+    sbom: dict = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "serialNumber": f"urn:uuid:build-recorder-sbom",
+        "metadata": {
+            "timestamp": now,
+            "tools": [{"vendor": "build-recorder", "name": "sbom.py", "version": "1.0"}],
+            "component": {
+                "type": "application",
+                "name": source_file.stem.replace("-build", ""),
+            },
+        },
+        "components": cdx_components,
+    }
+    if cdx_vulns:
+        sbom["vulnerabilities"] = cdx_vulns
+
+    return sbom
+
+# ── Markdown report ───────────────────────────────────────────────────────────
+
+def generate_report(
+    components: list[VendoredComponent],
+    source_file: Path,
+) -> str:
+    lines = []
+    W = lines.append
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    pkg = source_file.stem.replace("-build", "")
+
+    W(f"# SBOM: Vendored dependencies — {pkg}")
+    W(f"\nGenerated: {now}  \nSource: `{source_file}`\n")
+
+    total_cves = sum(len(c.cves) for c in components)
+    critical = sum(1 for c in components for v in c.cves
+                   if _osv_severity(v)[0] in ("critical", "high"))
+
+    W("## Summary\n")
+    W(f"| | |")
+    W(f"|---|---|")
+    W(f"| Vendored components detected | {len(components)} |")
+    W(f"| Components with known version | {sum(1 for c in components if c.version)} |")
+    W(f"| CVEs found | {total_cves} |")
+    W(f"| Critical/High CVEs | {critical} |")
+
+    W("\n## Detected Components\n")
+    W("| Component | Version | Method | Files compiled | CVEs |")
+    W("|---|---|---|---|---|")
+    for comp in sorted(components, key=lambda c: c.spec.display_name):
+        ver = comp.version or "**unknown**"
+        cve_col = str(len(comp.cves)) if comp.cves else "—"
+        if any(_osv_severity(v)[0] in ("critical", "high") for v in comp.cves):
+            cve_col = f"**{cve_col} ⚠**"
+        W(f"| [{comp.spec.display_name}]({comp.spec.homepage or '#'}) "
+          f"| `{ver}` | {comp.version_method} | {len(comp.source_files)} | {cve_col} |")
+
+    if any(c.cves for c in components):
+        W("\n## CVE Details\n")
+        for comp in components:
+            if not comp.cves:
+                continue
+            W(f"### {comp.spec.display_name} {comp.version or ''}\n")
+            for vuln in sorted(comp.cves,
+                               key=lambda v: SEVERITY_ORDER.get(
+                                   _osv_severity(v)[0].upper(), 5)):
+                vid = vuln.get("id", "UNKNOWN")
+                aliases = [a for a in vuln.get("aliases", []) if a.startswith("CVE-")]
+                sev, score = _osv_severity(vuln)
+                summary = vuln.get("summary", "No description")
+                W(f"**{vid}**" + (f" / {', '.join(aliases)}" if aliases else ""))
+                W(f"- Severity: `{sev.upper()}` (score: {score})")
+                W(f"- {summary}")
+                fix = ""
+                for affected in vuln.get("affected", []):
+                    for rng in affected.get("ranges", []):
+                        for ev in rng.get("events", []):
+                            if "fixed" in ev:
+                                fix = ev["fixed"]
+                if fix:
+                    W(f"- Fixed in: `{fix}`")
+                W(f"- OSV: https://osv.dev/vulnerability/{vid}\n")
+    else:
+        W("\n*No CVEs found. Run with `--osv-api` for online lookup, or version data may be unavailable.*\n")
+
+    W("\n## Component Details\n")
+    for comp in components:
+        W(f"### {comp.spec.display_name}\n")
+        W(f"- **Version**: {comp.version or '*(unknown)*'} "
+          f"(detected via: {comp.version_method}, confidence: {comp.version_confidence:.0%})")
+        W(f"- **Vendor dir**: `{comp.vendor_dir}`")
+        W(f"- **PURL**: `{comp.purl}`")
+        if comp.spec.homepage:
+            W(f"- **Homepage**: {comp.spec.homepage}")
+        W(f"- **Compiled files** ({len(comp.source_files)}):")
+        for f in sorted(comp.source_files)[:10]:
+            W(f"  - `{Path(f).name}`")
+        if len(comp.source_files) > 10:
+            W(f"  - *…and {len(comp.source_files) - 10} more*")
+        if comp.osv_match:
+            ri = comp.osv_match.get("repo_info", {})
+            W(f"- **OSV match**: `{ri.get('address', '')}` "
+              f"commit `{ri.get('commit', '')[:12]}` "
+              f"(score: {comp.osv_match.get('score', 0):.0%})")
+        W("")
+
+    W("---")
+    W("*Report generated by `sbom.py` / build-recorder*")
+    return "\n".join(lines)
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Generate SBOM and CVE report for vendored C/C++ dependencies.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    ap.add_argument("out_file", help="Enriched build-recorder .out file (after enrich.py)")
+    ap.add_argument("-o", "--output", metavar="sbom.json",
+                    help="CycloneDX SBOM output path (default: <input>.sbom.json)")
+    ap.add_argument("--report", metavar="report.md",
+                    help="Markdown report output path (default: <input>.sbom-report.md)")
+    ap.add_argument("--source-dir", metavar="DIR",
+                    help="Project source directory for version string extraction and OSV hashing")
+    ap.add_argument("--osv-api", action="store_true",
+                    help="Call OSV API for determineversion and CVE lookup (requires internet)")
+    ap.add_argument("--no-cve", action="store_true",
+                    help="Skip CVE lookup (generate SBOM only)")
+    args = ap.parse_args()
+
+    out_file = Path(args.out_file)
+    if not out_file.exists():
+        print(f"ERROR: not found: {out_file}", file=sys.stderr)
+        sys.exit(1)
+
+    sbom_path = Path(args.output) if args.output else out_file.with_suffix(".sbom.json")
+    report_path = Path(args.report) if args.report else out_file.with_suffix(".sbom-report.md")
+    source_dir = Path(args.source_dir) if args.source_dir else None
+
+    print(f"Parsing {out_file.name} ...", end=" ", flush=True)
+    records = parse_file_records(out_file)
+    print(f"{len(records)} file records")
+
+    print("Detecting vendored components (Layer 1: path patterns) ...", end=" ", flush=True)
+    components = detect_vendored_components(records)
+    print(f"{len(components)} components found")
+
+    for comp in components:
+        status = f"{comp.version} ({comp.version_method})" if comp.version else "version unknown"
+        print(f"  {comp.spec.display_name:20s}  {len(comp.source_files):3d} files  {status}")
+
+    if source_dir:
+        print(f"\nExtracting version strings from {source_dir} (Layer 2) ...")
+        extract_versions_from_source(components, source_dir)
+        for comp in components:
+            if comp.version_method == "version_string":
+                print(f"  {comp.spec.display_name}: {comp.version} (from source)")
+
+    if args.osv_api and source_dir:
+        print("\nQuerying OSV determineversion API (Layer 3) ...")
+        for comp in components:
+            if comp.version_confidence < 0.8:
+                print(f"  {comp.spec.display_name} ...", end=" ", flush=True)
+                query_osv_determineversion(comp, source_dir)
+                print(comp.version or "no match")
+
+    if args.osv_api and not args.no_cve:
+        print("\nQuerying OSV CVE database (Layer 4) ...")
+        for comp in components:
+            print(f"  {comp.spec.display_name} {comp.version or '?'} ...", end=" ", flush=True)
+            query_osv_cves(comp)
+            if comp.cves:
+                print(f"{len(comp.cves)} CVEs")
+            else:
+                print("no CVEs found")
+
+    print(f"\nGenerating CycloneDX SBOM → {sbom_path}")
+    sbom = generate_cyclonedx(components, out_file)
+    sbom_path.write_text(json.dumps(sbom, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print(f"Generating Markdown report → {report_path}")
+    report = generate_report(components, out_file)
+    report_path.write_text(report, encoding="utf-8")
+
+    total_cves = sum(len(c.cves) for c in components)
+    critical = sum(1 for c in components for v in c.cves
+                   if _osv_severity(v)[0] in ("critical", "high"))
+    print(f"\n=== Done ===")
+    print(f"  Components : {len(components)}")
+    print(f"  With version: {sum(1 for c in components if c.version)}/{len(components)}")
+    print(f"  CVEs found : {total_cves} ({critical} critical/high)")
+    print(f"  SBOM       : {sbom_path}")
+    print(f"  Report     : {report_path}")
+
+
+if __name__ == "__main__":
+    main()
