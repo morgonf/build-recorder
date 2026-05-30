@@ -38,10 +38,21 @@ record_start(char *fname)
 static void
 record_triple(char *s, const char *p, char *o, bool o_as_string)
 {
-    if (o_as_string)
-	fprintf(fout, "%s\t%s\t\"%s\" .\n", s, p, o);
-    else
+    if (!o_as_string) {
 	fprintf(fout, "%s\t%s\t%s .\n", s, p, o);
+	return;
+    }
+    fprintf(fout, "%s\t%s\t\"", s, p);
+    for (const char *c = o; *c; c++) {
+	switch (*c) {
+	    case '\\': fputs("\\\\", fout); break;
+	    case '"':  fputs("\\\"", fout); break;
+	    case '\n': fputs("\\n",  fout); break;
+	    case '\r': fputs("\\r",  fout); break;
+	    default:   fputc(*c, fout);
+	}
+    }
+    fputs("\" .\n", fout);
 }
 
 static void

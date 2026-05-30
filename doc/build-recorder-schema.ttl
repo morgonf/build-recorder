@@ -12,7 +12,7 @@ b:process a rdfs:Class ;
     rdfs:label "Process" ;
     rdfs:comment "Represents a process." .
 
-b:file a rdfs:Class .
+b:file a rdfs:Class ;
     rdfs:label "File" ;
     rdfs:comment "Represents a file." .
 
