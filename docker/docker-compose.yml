@@ -1,5 +1,5 @@
 services:
-  civetweb-demo:
+  build-record:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -8,8 +8,8 @@ services:
     security_opt:
       - seccomp:unconfined
     volumes:
-      - /home/user/hasher-repo/sisyphus/SRPMS.hasher:/srpms:ro
-      - ./output:/output
+      - ${SRPM_DIR:?set SRPM_DIR to the directory containing the .src.rpm}:/srpms:ro
+      - ${OUTPUT_DIR:?set OUTPUT_DIR to the host directory for results}:/output
     environment:
-      - SRPM=/srpms/civetweb-1.16-alt5.git588860e.src.rpm
+      - SRPM=/srpms/${SRPM_FILE:?set SRPM_FILE to the .src.rpm filename}
       - OUTPUT_DIR=/output
