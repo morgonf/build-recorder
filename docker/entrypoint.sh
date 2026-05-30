@@ -48,9 +48,19 @@ build_from_git() {
             build_cmd="make -j$(nproc)"
         elif [[ -f meson.build ]]; then
             build_cmd="meson setup _build && ninja -C _build"
+        elif [[ -f WORKSPACE ]] || [[ -f MODULE.bazel ]]; then
+            local bazel_targets="${BAZEL_TARGETS:-//...}"
+            local bazel_flags="${BAZEL_FLAGS:---config=release}"
+            # Use $HOME/.cache/bazel in bazel-cache volume for reuse between runs
+            build_cmd="bazel --output_user_root=${BAZEL_CACHE_DIR}/root \
+                build ${bazel_flags} \
+                --disk_cache=${BAZEL_CACHE_DIR}/disk \
+                -j $(nproc) \
+                ${bazel_targets}"
         else
             echo "ERROR: не удалось определить систему сборки" >&2
-            echo "  Установите GIT_BUILD_CMD вручную" >&2
+            echo "  Поддерживаемые: CMake, autotools, Makefile, meson, Bazel" >&2
+            echo "  Установите GIT_BUILD_CMD или BAZEL_TARGETS вручную" >&2
             exit 1
         fi
     fi
@@ -138,9 +148,52 @@ build_from_srpm() {
     echo "Output: $output_file"
 }
 
+# ── Экспорт бинарей для CVE-анализа ──────────────────────────────────────────
+
+export_binaries() {
+    local build_root="$1"
+    local bin_dir="${OUTPUT_DIR}/binaries"
+    mkdir -p "$bin_dir"
+
+    local count=0
+
+    # Директории поиска: традиционные + Bazel output
+    local search_dirs=("$build_root")
+    for bazel_out in /build/src/bazel-bin /build/src/bazel-out; do
+        [[ -d "$bazel_out" ]] && search_dirs+=("$bazel_out")
+    done
+
+    for dir in "${search_dirs[@]}"; do
+        [[ -d "$dir" ]] || continue
+        while IFS= read -r f; do
+            local dest="${bin_dir}/$(basename "$f")"
+            if [[ ! -e "$dest" ]] || [[ $(stat -c%s "$f") -gt $(stat -c%s "$dest") ]]; then
+                cp "$f" "$dest" 2>/dev/null && count=$((count + 1)) || true
+            fi
+        done < <(find "$dir" -maxdepth 10 \
+            \( -name "*.so.*" -o -name "*.a" \) \
+            -not -name "*.py" -not -name "*.cmake" \
+            -not -path "*/CMakeFiles/*" \
+            -not -path "*/_virtual_includes/*" \
+            -not -path "*/external/*" \
+            2>/dev/null | sort)
+    done
+
+    echo "=== Exporting binaries for CVE scanning ==="
+    echo "    Count    : $count files"
+    echo "    Dir      : $bin_dir"
+    echo ""
+}
+
 # ── Запуск ────────────────────────────────────────────────────────────────────
 
 case "$MODE" in
-    git)  build_from_git  ;;
-    srpm) build_from_srpm ;;
+    git)
+        build_from_git
+        export_binaries /build/src
+        ;;
+    srpm)
+        build_from_srpm
+        export_binaries /root/RPM/BUILD
+        ;;
 esac
