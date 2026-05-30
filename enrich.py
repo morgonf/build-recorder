@@ -42,15 +42,40 @@ TOOL_DIRS = {
 
 
 def load_rpm_dump(dump_file: Path) -> dict[str, tuple[str, str]]:
-    """Returns {abspath: (rpm_name, rpm_nevra)}."""
+    """
+    Returns {abspath: (rpm_name, rpm_nevra)}.
+
+    Handles symlink path aliases common in modern Linux where /lib64, /bin, /sbin
+    are symlinks to /usr/lib64, /usr/bin, /usr/sbin. Both path forms are indexed
+    so build-recorder paths (which follow symlinks to /usr/...) match RPM paths.
+    """
     path_to_pkg: dict[str, tuple[str, str]] = {}
+
+    # Symlink aliases: paths that are identical after resolution
+    ALIAS_PREFIXES = {
+        "/lib/":    "/usr/lib/",
+        "/lib64/":  "/usr/lib64/",
+        "/bin/":    "/usr/bin/",
+        "/sbin/":   "/usr/sbin/",
+    }
+
     with open(dump_file, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             parts = line.rstrip("\n").split("\t", 2)
-            if len(parts) == 3:
-                filepath, rpm_name, rpm_nevra = parts
-                if filepath:
-                    path_to_pkg[filepath] = (rpm_name, rpm_nevra)
+            if len(parts) != 3:
+                continue
+            filepath, rpm_name, rpm_nevra = parts
+            if not filepath:
+                continue
+            pkg = (rpm_name, rpm_nevra)
+            path_to_pkg[filepath] = pkg
+            # Add alias: /lib64/foo → /usr/lib64/foo (and vice versa)
+            for short, long_ in ALIAS_PREFIXES.items():
+                if filepath.startswith(short):
+                    path_to_pkg[long_ + filepath[len(short):]] = pkg
+                elif filepath.startswith(long_):
+                    path_to_pkg[short + filepath[len(long_):]] = pkg
+
     return path_to_pkg
 
 
