@@ -45,7 +45,12 @@ RUN apt-get update -q && \
         unzip \
         zip \
         patch \
-        java-17-openjdk-headless && \
+        java-17-openjdk-headless \
+        flex \
+        bison \
+        libevent-devel \
+        boost-devel \
+        boost-locale-devel && \
     apt-get clean
 
 # Install Bazelisk — auto-downloads the correct Bazel version per .bazelversion
