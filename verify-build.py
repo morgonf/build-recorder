@@ -27,25 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# ── Process classification ────────────────────────────────────────────────────
-
-COMPILER_NAMES = {
-    "cc1", "cc1plus", "lto1", "lto-wrapper",
-    "gcc", "g++", "gcc_wrapper",
-    "x86_64-alt-linux-gcc-13", "x86_64-alt-linux-g++-13",
-    "x86_64-alt-linux-gcc-14", "x86_64-alt-linux-g++-14",
-    "clang", "clang++",
-}
-LINKER_NAMES = {
-    "ld", "ld.bfd", "ld.gold", "ld.lld", "gold", "collect2",
-}
-ASSEMBLER_NAMES = {"as", "x86_64-alt-linux-as"}
-ARCHIVER_NAMES = {
-    "ar", "ranlib",
-    "x86_64-alt-linux-ar", "x86_64-alt-linux-ranlib",
-    "x86_64-alt-linux-gcc-ar-13", "x86_64-alt-linux-gcc-ranlib-13",
-    "x86_64-alt-linux-gcc-ar-14", "x86_64-alt-linux-gcc-ranlib-14",
-}
+import brec.ir as _brec_ir
+from brec.classify import classify_roles as _brec_classify_roles
+from brec.model import parse_out as _brec_parse_out
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
@@ -144,110 +128,54 @@ def _is_vendor_path(abspath: str) -> bool:
     return any(p in VENDOR for p in abspath.lower().replace("\\", "/").split("/"))
 
 
-def _proc_kind(exe_path: str) -> str:
-    name = Path(exe_path).name
-    if name in COMPILER_NAMES:
-        return "compiler"
-    if name in LINKER_NAMES:
-        return "linker"
-    if name in ASSEMBLER_NAMES:
-        return "assembler"
-    if name in ARCHIVER_NAMES:
-        return "archiver"
-    return "other"
+def _to_build_graph_for_roles(
+    files: dict[str, "FileNode"],
+    procs: dict[str, "ProcessNode"],
+) -> "_brec_ir.BuildGraph":
+    """Build a minimal BuildGraph so brec.classify.classify_roles() can set roles."""
+    brec_files = {
+        uri: _brec_ir.FileNode(
+            uri=uri, abspath=f.abspath, name=f.name,
+            size=0, git_blob_sha1=f.git_hash,
+        )
+        for uri, f in files.items()
+    }
+    brec_procs = {
+        uri: _brec_ir.ProcessNode(
+            uri=uri, pid=0, cmd="",
+            executable=p.exe_uri,
+            start=None, end=None,
+            reads=list(p.reads), writes=list(p.writes),
+            execs=[], renames=list(p.renames),
+        )
+        for uri, p in procs.items()
+    }
+    return _brec_ir.BuildGraph(files=brec_files, procs=brec_procs)
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
-def parse_graph(out_file: Path) -> tuple[dict[str, FileNode], dict[str, ProcessNode]]:
-    """
-    Fast line-by-line parser for flat-triple Turtle format.
-    Returns (files_by_uri, procs_by_uri).
-    """
+def parse_graph(out_file: Path) -> tuple[dict[str, "FileNode"], dict[str, "ProcessNode"]]:
+    """Build (files_by_uri, procs_by_uri) via brec.model.parse_out()."""
+    graph = _brec_parse_out(out_file)
+
     files: dict[str, FileNode] = {}
+    for fn in graph.files.values():
+        local = FileNode(uri=fn.uri)
+        local.abspath   = fn.abspath
+        local.git_hash  = fn.git_blob_sha1
+        local.dep_type  = fn.dep_type
+        local.rpm_name  = fn.rpm_name
+        local.rpm_nevra = fn.rpm_nevra
+        files[fn.uri] = local
+
     procs: dict[str, ProcessNode] = {}
-    file_uris: set[str] = set()
-    proc_uris: set[str] = set()
-
-    file_re    = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
-    proc_re    = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:process\b")
-    prop_re    = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
-    rel_re     = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+(:[a-zA-Z_]\w*)\s*[.;]")
-    bare_re    = re.compile(r"^(:[a-zA-Z_]\w*)\s*$")
-    istr_re    = re.compile(r"^\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
-    irel_re    = re.compile(r"^\s+b:(\w+)\s+(:[a-zA-Z_]\w*)\s*[.;]")
-    current: Optional[str] = None
-
-    def _unescape(s: str) -> str:
-        return (s.replace('\\"', '"').replace("\\\\", "\\")
-                  .replace("\\n", "\n").replace("\\t", "\t"))
-
-    def _set_prop(uri: str, prop: str, val: str) -> None:
-        if uri in file_uris:
-            f = files.setdefault(uri, FileNode(uri=uri))
-            if prop == "abspath":  f.abspath  = val
-            elif prop == "hash":   f.git_hash = val
-            elif prop == "dep_type":  f.dep_type  = val
-            elif prop == "rpm_name":  f.rpm_name  = val
-            elif prop == "rpm_package": f.rpm_nevra = val
-        elif uri in proc_uris:
-            pass  # we only need relationship props for processes
-
-    def _set_rel(subj: str, pred: str, obj: str) -> None:
-        if subj in proc_uris:
-            p = procs.setdefault(subj, ProcessNode(uri=subj))
-            if pred == "reads":        p.reads.append(obj)
-            elif pred == "writes":     p.writes.append(obj)
-            elif pred == "rename":     p.renames.append(obj)
-            elif pred == "executable": p.exe_uri = obj
-
-    with open(out_file, encoding="utf-8", errors="replace") as fh:
-        for raw in fh:
-            line = raw.rstrip("\n")
-
-            m = file_re.match(line)
-            if m:
-                current = m.group(1)
-                file_uris.add(current)
-                files.setdefault(current, FileNode(uri=current))
-                continue
-
-            m = proc_re.match(line)
-            if m:
-                current = m.group(1)
-                proc_uris.add(current)
-                procs.setdefault(current, ProcessNode(uri=current))
-                continue
-
-            # Direct property triple: :fN  b:prop  "value"
-            m = prop_re.match(line)
-            if m:
-                _set_prop(m.group(1), m.group(2), _unescape(m.group(3)))
-                current = None
-                continue
-
-            # Direct relationship triple: :pN  b:reads  :fM
-            m = rel_re.match(line)
-            if m:
-                _set_rel(m.group(1), m.group(2), m.group(3))
-                current = None
-                continue
-
-            # Bare URI (enrichment block header)
-            m = bare_re.match(line)
-            if m:
-                current = m.group(1)
-                continue
-
-            if current and line and line[0].isspace():
-                m = istr_re.match(line)
-                if m:
-                    _set_prop(current, m.group(1), _unescape(m.group(2)))
-                    continue
-                m = irel_re.match(line)
-                if m:
-                    _set_rel(current, m.group(1), m.group(2))
-            elif current and line and not line.startswith("#"):
-                current = None
+    for pn in graph.procs.values():
+        local = ProcessNode(uri=pn.uri)
+        local.exe_uri  = pn.executable
+        local.reads    = list(pn.reads)
+        local.writes   = list(pn.writes)
+        local.renames  = list(pn.renames)
+        procs[pn.uri] = local
 
     return files, procs
 
@@ -274,6 +202,10 @@ def analyze(files: dict[str, FileNode],
     seen_dynamic: set[str] = set()
     seen_artifact: set[str] = set()
 
+    # Use brec.classify for process-role determination (replaces local _proc_kind)
+    _graph = _to_build_graph_for_roles(files, procs)
+    _brec_classify_roles(_graph)
+
     # Pre-compute set of URIs written OR renamed during this build (= own artifacts)
     written_uris: set[str] = set()
     for proc in procs.values():
@@ -281,8 +213,8 @@ def analyze(files: dict[str, FileNode],
         written_uris.update(proc.renames)
 
     for proc in procs.values():
-        exe_path = files[proc.exe_uri].abspath if proc.exe_uri and proc.exe_uri in files else ""
-        kind = _proc_kind(exe_path)
+        _bp = _graph.procs.get(proc.uri)
+        kind = (_bp.role or "other") if _bp else "other"
 
         if kind in ("compiler", "assembler"):
             for furi in proc.reads:

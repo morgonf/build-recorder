@@ -1,0 +1,41 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# Fixture to verify Turtle string unescaping.
+# Covers: embedded double-quotes, backslashes, spaces, unicode.
+
+# Path with embedded double-quote (Turtle: \")
+:f0 a b:file .
+:f0 b:abspath "/path/with \"quotes\"/file.c" .
+:f0 b:name "file.c" .
+:f0 b:size 100 .
+:f0 b:hash "aaaa000000000000000000000000000000000001" .
+
+# Path with backslash (Turtle: \\)
+:f1 a b:file .
+:f1 b:abspath "/path/with\\backslash/file.c" .
+:f1 b:name "file.c" .
+:f1 b:size 100 .
+:f1 b:hash "aaaa000000000000000000000000000000000002" .
+
+# Path with spaces (no escaping needed in quoted Turtle strings)
+:f2 a b:file .
+:f2 b:abspath "/path/with spaces/file.c" .
+:f2 b:name "file.c" .
+:f2 b:size 100 .
+:f2 b:hash "aaaa000000000000000000000000000000000003" .
+
+# Path with unicode characters
+:f3 a b:file .
+:f3 b:abspath "/путь/к/файлу.c" .
+:f3 b:name "файлу.c" .
+:f3 b:size 100 .
+:f3 b:hash "aaaa000000000000000000000000000000000004" .
+
+:p0 a b:process .
+:p0 b:pid 1 .
+:p0 b:cmd "cc \"/path/with \\\"quotes\\\"/file.c\"" .
+:p0 b:reads :f0 .
+:p0 b:reads :f1 .
+:p0 b:reads :f2 .
+:p0 b:reads :f3 .

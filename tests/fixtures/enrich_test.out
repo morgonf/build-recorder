@@ -1,0 +1,37 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# System header (will get static_header from enrich)
+:f1 a b:file .
+:f1 b:abspath "/usr/include/stdio.h" .
+:f1 b:name "stdio.h" .
+:f1 b:size 500 .
+:f1 b:hash "aa00000000000000000000000000000000000001" .
+
+# System .so (will get dynamic_lib)
+:f2 a b:file .
+:f2 b:abspath "/usr/lib64/libc.so.6" .
+:f2 b:name "libc.so.6" .
+:f2 b:size 50000 .
+:f2 b:hash "bb00000000000000000000000000000000000002" .
+
+# Project source, no RPM (will get project_source)
+:f3 a b:file .
+:f3 b:abspath "/home/user/project/main.c" .
+:f3 b:name "main.c" .
+:f3 b:size 2000 .
+:f3 b:hash "cc00000000000000000000000000000000000003" .
+
+# System static archive (will get static_archive)
+:f4 a b:file .
+:f4 b:abspath "/usr/lib64/libz.a" .
+:f4 b:name "libz.a" .
+:f4 b:size 20000 .
+:f4 b:hash "dd00000000000000000000000000000000000004" .
+
+# Build tool (will get build_tool)
+:f5 a b:file .
+:f5 b:abspath "/usr/bin/gcc" .
+:f5 b:name "gcc" .
+:f5 b:size 10000 .
+:f5 b:hash "ee00000000000000000000000000000000000005" .

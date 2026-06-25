@@ -1,0 +1,40 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# Minimal flat-format fixture: one triple per line.
+# Same logical graph as grouped.out — used to test format equivalence.
+
+:p0 a b:process .
+:p0 b:pid 200 .
+:p0 b:cmd "make all" .
+:p0 b:start "2024-02-01T08:00:00" .
+:p0 b:end "2024-02-01T08:00:10" .
+
+:p1 a b:process .
+:p1 b:pid 201 .
+:p1 b:cmd "/usr/bin/gcc -o out.o in.c" .
+:p1 b:start "2024-02-01T08:00:01" .
+:p1 b:end "2024-02-01T08:00:05" .
+
+:f0 a b:file .
+:f0 b:abspath "/usr/bin/gcc" .
+:f0 b:name "gcc" .
+:f0 b:size 2000 .
+:f0 b:hash "1111111111111111111111111111111111111111" .
+
+:f1 a b:file .
+:f1 b:abspath "/home/user/project/in.c" .
+:f1 b:name "in.c" .
+:f1 b:size 512 .
+:f1 b:hash "2222222222222222222222222222222222222222" .
+
+:f2 a b:file .
+:f2 b:abspath "/tmp/out.o" .
+:f2 b:name "out.o" .
+:f2 b:size 1024 .
+:f2 b:hash "3333333333333333333333333333333333333333" .
+
+:p0 b:creates :p1 .
+:p1 b:executable :f0 .
+:p1 b:reads :f1 .
+:p1 b:writes :f2 .

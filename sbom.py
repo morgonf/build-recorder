@@ -34,6 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from brec.model import parse_out as _brec_parse_out
+
 # ── Vendor directory patterns ─────────────────────────────────────────────────
 
 VENDOR_DIRS = {
@@ -225,75 +227,18 @@ class VendoredComponent:
 # ── Parser: read enriched .out file ──────────────────────────────────────────
 
 def parse_file_records(out_file: Path) -> list[FileRecord]:
-    """Extract all file nodes with uri, abspath, hash, dep_type from .out.
-
-    Handles two formats produced by build-recorder + enrich.py:
-      Flat (original):  :fN  b:prop  "value" .   (one triple per line)
-      Grouped (enrich): :fN\n    b:prop "value" ; (bare URI + indented block)
-    """
-    records: dict[str, dict] = {}
-    file_uris: set[str] = set()
-
-    file_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
-    prop_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
-    iline_re = re.compile(r"^\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]")
-    bare_re  = re.compile(r"^(:[a-zA-Z_]\w*)\s*$")   # enrichment format: bare URI line
-    current  = None
-
-    with open(out_file, encoding="utf-8", errors="replace") as fh:
-        for raw in fh:
-            line = raw.rstrip("\n")
-
-            # File type declaration
-            m = file_re.match(line)
-            if m:
-                current = m.group(1)
-                file_uris.add(current)
-                records.setdefault(current, {})
-                continue
-
-            # Direct triple (flat format): :fN  b:prop  "value" .
-            m = prop_re.match(line)
-            if m:
-                uri, prop, val = m.group(1), m.group(2), m.group(3)
-                if prop in ("abspath", "hash", "dep_type", "rpm_name", "rpm_package"):
-                    records.setdefault(uri, {})[prop] = _unescape(val)
-                current = None
-                continue
-
-            # Bare URI line — enrichment block header (e.g. ":f0" alone)
-            m = bare_re.match(line)
-            if m:
-                current = m.group(1)
-                records.setdefault(current, {})
-                continue
-
-            # Indented triple (grouped/enrichment format)
-            if current:
-                m = iline_re.match(line)
-                if m:
-                    prop, val = m.group(1), m.group(2)
-                    if prop in ("abspath", "hash", "dep_type", "rpm_name", "rpm_package"):
-                        records.setdefault(current, {})[prop] = _unescape(val)
-                    continue
-                if line and not line[0].isspace() and not line.startswith("#"):
-                    current = None
-
+    """Extract all file nodes from .out via brec.model.parse_out()."""
+    graph = _brec_parse_out(out_file)
     result = []
-    for uri in file_uris:
-        d = records.get(uri, {})
-        if "abspath" in d:
+    for fn in graph.files.values():
+        if fn.abspath:
             result.append(FileRecord(
-                uri=uri,
-                abspath=d["abspath"],
-                git_hash=d.get("hash", ""),
-                dep_type=d.get("dep_type", ""),
+                uri=fn.uri,
+                abspath=fn.abspath,
+                git_hash=fn.git_blob_sha1,
+                dep_type=fn.dep_type,
             ))
     return result
-
-
-def _unescape(s: str) -> str:
-    return s.replace('\\"', '"').replace("\\\\", "\\").replace("\\n", "\n").replace("\\t", "\t")
 
 # ── Layer 1: path-based component detection ───────────────────────────────────
 

@@ -1,0 +1,21 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "serialNumber": "urn:uuid:build-recorder-sbom",
+  "metadata": {
+    "timestamp": "2026-06-01T07:36:43Z",
+    "tools": [
+      {
+        "vendor": "build-recorder",
+        "name": "sbom.py",
+        "version": "1.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "name": "tiny"
+    }
+  },
+  "components": []
+}

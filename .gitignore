@@ -97,3 +97,10 @@ build-aux/compile
 build-aux/depcomp
 build-aux/install-sh
 build-aux/missing
+
+# Bibliography PDFs (local copies, not versioned)
+doc/bibliography/pdf/
+
+# Python bytecode
+__pycache__/
+*.pyc

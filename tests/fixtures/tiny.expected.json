@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "stage": "graph",
+  "source_out": "tests/fixtures/tiny.out",
+  "payload": {
+    "files": {
+      ":f0": {
+        "uri": ":f0",
+        "abspath": "/usr/libexec/gcc/x86_64-alt-linux/12/cc1",
+        "name": "cc1",
+        "size": 1234567,
+        "git_blob_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+      },
+      ":f1": {
+        "uri": ":f1",
+        "abspath": "/home/user/project/hello.c",
+        "name": "hello.c",
+        "size": 256,
+        "git_blob_sha1": "aabbcc0000000000000000000000000000000001"
+      },
+      ":f2": {
+        "uri": ":f2",
+        "abspath": "/tmp/hello.o",
+        "name": "hello.o",
+        "size": 1024,
+        "git_blob_sha1": "aabbcc0000000000000000000000000000000002"
+      }
+    },
+    "procs": {
+      ":p0": {
+        "uri": ":p0",
+        "pid": 1001,
+        "cmd": "make -C /home/user/project",
+        "executable": null,
+        "start": "2024-01-15T10:00:00",
+        "end": "2024-01-15T10:00:05",
+        "reads": [],
+        "writes": [],
+        "execs": [":p1"],
+        "role": null,
+        "renames": []
+      },
+      ":p1": {
+        "uri": ":p1",
+        "pid": 1002,
+        "cmd": "/usr/libexec/gcc/x86_64-alt-linux/12/cc1 hello.c -o /tmp/hello.o",
+        "executable": ":f0",
+        "start": "2024-01-15T10:00:01",
+        "end": "2024-01-15T10:00:02",
+        "reads": [":f1"],
+        "writes": [":f2"],
+        "execs": [],
+        "role": null,
+        "renames": []
+      }
+    }
+  }
+}

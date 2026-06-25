@@ -1,0 +1,4 @@
+/usr/include/stdio.h	glibc-devel	glibc-devel-2.33-alt1.x86_64
+/usr/lib64/libc.so.6	glibc	glibc-2.33-alt1.x86_64
+/usr/lib64/libz.a	zlib-devel-static	zlib-devel-static-1.2.11-alt1.x86_64
+/usr/bin/gcc	gcc	gcc-12.2.1-alt1.x86_64

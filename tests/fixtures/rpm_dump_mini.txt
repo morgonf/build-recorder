@@ -1,0 +1,8 @@
+/lib64/libfoo.so.1	libfoo	libfoo-1.0-alt1.x86_64
+/usr/include/foo.h	libfoo-devel	libfoo-devel-1.0-alt1.x86_64
+/usr/bin/mytool	mytool	mytool-2.5-alt3.x86_64
+/lib/libbar.so.2	libbar	libbar-3.0-alt1.x86_64
+/usr/lib/libbar.so.2.0.0	libbar	libbar-3.0-alt1.x86_64
+/usr/lib64/libbaz.a	libbaz-devel	libbaz-devel-4.1-alt2.noarch
+/bin/sh	bash	bash-5.2.15-alt1.x86_64
+/usr/libexec/helper	mypkg	mypkg-1.0-alt1.x86_64

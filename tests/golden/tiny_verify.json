@@ -1,0 +1,23 @@
+{
+  "package": "tiny",
+  "generated": "2026-06-01T07:36:43.150207+00:00",
+  "static": {
+    "headers": [],
+    "sources": [
+      {
+        "path": "/home/user/project/hello.c",
+        "name": "hello.c",
+        "sha1_git": "aabbcc0000000000000000000000000000000001",
+        "rpm_name": "",
+        "rpm_nevra": "",
+        "dep_type": "",
+        "role": "source",
+        "verified": false,
+        "vendored": false
+      }
+    ],
+    "archives": []
+  },
+  "dynamic": [],
+  "artifacts": []
+}

@@ -1,0 +1,11 @@
+/usr/include/stdio.h	glibc-devel	glibc-devel-2.33-alt1.x86_64
+/usr/include/string.h	glibc-devel	glibc-devel-2.33-alt1.x86_64
+/usr/lib64/libc.so.6	glibc	glibc-2.33-alt1.x86_64
+/usr/lib64/libm.so.6	glibc	glibc-2.33-alt1.x86_64
+/usr/lib64/libz.a	zlib-devel-static	zlib-devel-static-1.2.11-alt1.x86_64
+/usr/bin/ld	binutils	binutils-2.38-alt1.x86_64
+/usr/bin/as	binutils	binutils-2.38-alt1.x86_64
+/usr/bin/ar	binutils	binutils-2.38-alt1.x86_64
+/usr/libexec/gcc/x86_64-alt-linux/12/cc1	gcc	gcc-12.2.1-alt1.x86_64
+/usr/libexec/gcc/x86_64-alt-linux/12/cc1plus	gcc	gcc-12.2.1-alt1.x86_64
+/usr/lib64/libfoo.so.2	libfoo	libfoo-1.0-alt1.x86_64

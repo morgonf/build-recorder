@@ -1,0 +1,20 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# File enriched with legacy b:rpm_* predicates (written by enrich.py)
+:f0 a b:file .
+:f0 b:abspath "/usr/include/openssl/ssl.h" .
+:f0 b:name "ssl.h" .
+:f0 b:size 85000 .
+:f0 b:hash "aaaa000000000000000000000000000000000010" .
+:f0 b:rpm_name "openssl-devel" .
+:f0 b:rpm_package "openssl-devel-3.0.1-alt1.x86_64" .
+:f0 b:dep_type "static_header" .
+
+# A process that reads the enriched file
+:p0 a b:process .
+:p0 b:pid 1001 .
+:p0 b:cmd "gcc -c foo.c -I/usr/include" .
+:p0 b:start "2024-03-01T09:00:00" .
+:p0 b:end "2024-03-01T09:00:02" .
+:p0 b:reads :f0 .

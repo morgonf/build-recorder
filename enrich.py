@@ -33,72 +33,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from brec.classify import dep_type_from_path
+from brec.provenance.rpm import RpmBackend
+
 MARKER = "# --- package provenance triples (added by enrich.py) ---\n"
-
-TOOL_DIRS = {
-    "/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/",
-    "/usr/libexec/", "/usr/lib/rpm/",
-}
-
-
-def load_rpm_dump(dump_file: Path) -> dict[str, tuple[str, str]]:
-    """
-    Returns {abspath: (rpm_name, rpm_nevra)}.
-
-    Handles symlink path aliases common in modern Linux where /lib64, /bin, /sbin
-    are symlinks to /usr/lib64, /usr/bin, /usr/sbin. Both path forms are indexed
-    so build-recorder paths (which follow symlinks to /usr/...) match RPM paths.
-    """
-    path_to_pkg: dict[str, tuple[str, str]] = {}
-
-    # Symlink aliases: paths that are identical after resolution
-    ALIAS_PREFIXES = {
-        "/lib/":    "/usr/lib/",
-        "/lib64/":  "/usr/lib64/",
-        "/bin/":    "/usr/bin/",
-        "/sbin/":   "/usr/sbin/",
-    }
-
-    with open(dump_file, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            parts = line.rstrip("\n").split("\t", 2)
-            if len(parts) != 3:
-                continue
-            filepath, rpm_name, rpm_nevra = parts
-            if not filepath:
-                continue
-            pkg = (rpm_name, rpm_nevra)
-            path_to_pkg[filepath] = pkg
-            # Add alias: /lib64/foo → /usr/lib64/foo (and vice versa)
-            for short, long_ in ALIAS_PREFIXES.items():
-                if filepath.startswith(short):
-                    path_to_pkg[long_ + filepath[len(short):]] = pkg
-                elif filepath.startswith(long_):
-                    path_to_pkg[short + filepath[len(long_):]] = pkg
-
-    return path_to_pkg
-
-
-def classify_dep_type(abspath: str, has_rpm: bool) -> str:
-    if not has_rpm:
-        return "project_source"
-
-    name = Path(abspath).name.lower()
-
-    if name.endswith((".h", ".hpp", ".hh", ".h++")):
-        return "static_header"
-
-    if ".so." in name or name.endswith(".so"):
-        return "dynamic_lib"
-
-    if name.endswith(".a"):
-        return "static_archive"
-
-    for d in TOOL_DIRS:
-        if abspath.startswith(d):
-            return "build_tool"
-
-    return "system_runtime"
 
 
 def _unescape(s: str) -> str:
@@ -127,7 +65,7 @@ def parse_file_abspaths(out_file: Path) -> dict[str, str]:
     abspaths: dict[str, str] = {}
     current_uri: str | None = None
 
-    file_re      = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
+    file_re       = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
     abs_direct_re = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
     abs_indent_re = re.compile(r"^\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
 
@@ -135,21 +73,18 @@ def parse_file_abspaths(out_file: Path) -> dict[str, str]:
         for raw in fh:
             line = raw.rstrip("\n")
 
-            # File type declaration
             m = file_re.match(line)
             if m:
                 file_uris.add(m.group(1))
                 current_uri = m.group(1)
                 continue
 
-            # Direct abspath (flat format): ":fXX  b:abspath  "..." ."
             m = abs_direct_re.match(line)
             if m:
                 abspaths[m.group(1)] = _unescape(m.group(2))
                 current_uri = None
                 continue
 
-            # Indented abspath (grouped format): "    b:abspath "..." ;"
             if current_uri:
                 m = abs_indent_re.match(line)
                 if m:
@@ -181,18 +116,17 @@ def escape_ttl(s: str) -> str:
 
 def build_triples(
     uri_to_abspath: dict[str, str],
-    path_to_pkg: dict[str, tuple[str, str]],
+    rpm_backend: RpmBackend,
 ) -> list[str]:
     blocks: list[str] = []
     for uri, abspath in sorted(uri_to_abspath.items()):
-        pkg_info = path_to_pkg.get(abspath)
-        dep_type = classify_dep_type(abspath, pkg_info is not None)
+        pkg_ref = rpm_backend.lookup(abspath, "") if rpm_backend.available() else None
+        dep_type = dep_type_from_path(abspath, pkg_ref is not None)
 
         parts: list[str] = []
-        if pkg_info:
-            rpm_name, rpm_nevra = pkg_info
-            parts.append(f'    b:rpm_name "{escape_ttl(rpm_name)}" ;')
-            parts.append(f'    b:rpm_package "{escape_ttl(rpm_nevra)}" ;')
+        if pkg_ref:
+            parts.append(f'    b:rpm_name "{escape_ttl(pkg_ref.name)}" ;')
+            parts.append(f'    b:rpm_package "{escape_ttl(pkg_ref.version)}" ;')
         parts.append(f'    b:dep_type "{dep_type}" .')
 
         blocks.append(uri + "\n" + "\n".join(parts))
@@ -202,17 +136,17 @@ def build_triples(
 
 def print_stats(
     uri_to_abspath: dict[str, str],
-    path_to_pkg: dict[str, tuple[str, str]],
-):
+    rpm_backend: RpmBackend,
+) -> None:
     dep_counts: dict[str, int] = defaultdict(int)
     pkg_counts: dict[str, int] = defaultdict(int)
 
     for abspath in uri_to_abspath.values():
-        pkg_info = path_to_pkg.get(abspath)
-        dep_type = classify_dep_type(abspath, pkg_info is not None)
+        pkg_ref = rpm_backend.lookup(abspath, "") if rpm_backend.available() else None
+        dep_type = dep_type_from_path(abspath, pkg_ref is not None)
         dep_counts[dep_type] += 1
-        if pkg_info:
-            pkg_counts[pkg_info[0]] += 1
+        if pkg_ref:
+            pkg_counts[pkg_ref.name] += 1
 
     print("\n=== Enrichment summary ===")
     print("Dependency types:")
@@ -225,7 +159,7 @@ def print_stats(
             print(f"  {pkg:45s}: {n}")
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(
         description="Add RPM package provenance triples to a build-recorder .out file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -258,20 +192,21 @@ def main():
         sys.exit(1)
 
     print(f"Loading RPM dump from {rpm_dump} ...", end=" ", flush=True)
-    path_to_pkg = load_rpm_dump(rpm_dump)
-    print(f"{len(path_to_pkg)} file-package mappings")
+    backend = RpmBackend()
+    backend.build_index(rpm_dump)
+    print(f"{len(backend.index_as_dict())} file-package mappings")
 
     print(f"Scanning file nodes in {out_file} ...", end=" ", flush=True)
     uri_to_abspath = parse_file_abspaths(out_file)
     print(f"{len(uri_to_abspath)} file nodes")
 
-    print_stats(uri_to_abspath, path_to_pkg)
+    print_stats(uri_to_abspath, backend)
 
     if args.dry_run:
         print("\n[dry-run] No changes written.")
         return
 
-    triples = build_triples(uri_to_abspath, path_to_pkg)
+    triples = build_triples(uri_to_abspath, backend)
     print(f"\nAppending {len(triples)} enriched file blocks to {out_file} ...")
     with open(out_file, "a", encoding="utf-8") as fh:
         fh.write("\n")

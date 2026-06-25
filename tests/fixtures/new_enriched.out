@@ -1,0 +1,25 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# File with new b:pkg_* predicates AND legacy b:rpm_* present.
+# New predicates must take priority over legacy ones.
+:f0 a b:file .
+:f0 b:abspath "/usr/lib/x86_64-linux-gnu/libssl.so.3" .
+:f0 b:name "libssl.so.3" .
+:f0 b:size 512000 .
+:f0 b:hash "bbbb000000000000000000000000000000000010" .
+:f0 b:pkg_backend "dpkg" .
+:f0 b:pkg_name "libssl3" .
+:f0 b:pkg_version "3.0.2-0ubuntu1.10" .
+:f0 b:purl "pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.10?arch=amd64" .
+:f0 b:rpm_name "old-rpm-name-should-not-win" .
+:f0 b:rpm_package "old-rpm-nevra-should-not-win-1.0-alt1.x86_64" .
+:f0 b:dep_type "dynamic_lib" .
+
+# A process that reads the file
+:p0 a b:process .
+:p0 b:pid 1002 .
+:p0 b:cmd "ld -o prog prog.o -lssl" .
+:p0 b:start "2024-03-01T09:01:00" .
+:p0 b:end "2024-03-01T09:01:03" .
+:p0 b:reads :f0 .

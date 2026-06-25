@@ -1,0 +1,104 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# ── Executables ────────────────────────────────────────────────────────────────
+
+:f_cc1 a b:file .
+:f_cc1 b:abspath "/usr/libexec/gcc/x86_64-alt-linux/12/cc1" .
+:f_cc1 b:name "cc1" .
+:f_cc1 b:size 10000 .
+:f_cc1 b:hash "cc100000000000000000000000000000000000000" .
+
+:f_ld a b:file .
+:f_ld b:abspath "/usr/bin/ld" .
+:f_ld b:name "ld" .
+:f_ld b:size 8000 .
+:f_ld b:hash "dd000000000000000000000000000000000000000" .
+
+# ── Input files ────────────────────────────────────────────────────────────────
+
+# System header (has RPM)
+:f1 a b:file .
+:f1 b:abspath "/usr/include/stdio.h" .
+:f1 b:name "stdio.h" .
+:f1 b:size 500 .
+:f1 b:hash "aa00000000000000000000000000000000000001" .
+
+# Vendor source — src/third_party/sqlite (no RPM)
+:f2 a b:file .
+:f2 b:abspath "/home/user/project/src/third_party/sqlite/sqlite3.c" .
+:f2 b:name "sqlite3.c" .
+:f2 b:size 100000 .
+:f2 b:hash "bb00000000000000000000000000000000000002" .
+
+# Project source (no RPM, not vendor)
+:f3 a b:file .
+:f3 b:abspath "/home/user/project/src/main.c" .
+:f3 b:name "main.c" .
+:f3 b:size 2000 .
+:f3 b:hash "cc00000000000000000000000000000000000003" .
+
+# System .so linked at runtime (has RPM)
+:f4 a b:file .
+:f4 b:abspath "/usr/lib64/libc.so.6" .
+:f4 b:name "libc.so.6" .
+:f4 b:size 50000 .
+:f4 b:hash "dd00000000000000000000000000000000000004" .
+
+# System static archive (has RPM)
+:f5 a b:file .
+:f5 b:abspath "/usr/lib64/libz.a" .
+:f5 b:name "libz.a" .
+:f5 b:size 20000 .
+:f5 b:hash "ee00000000000000000000000000000000000005" .
+
+# Output artifact (written by linker)
+:f6 a b:file .
+:f6 b:abspath "/home/user/project/build/myapp" .
+:f6 b:name "myapp" .
+:f6 b:size 80000 .
+:f6 b:hash "ff00000000000000000000000000000000000006" .
+
+# Toolchain temp file
+:f7 a b:file .
+:f7 b:abspath "/tmp/ccABCDEFG.o" .
+:f7 b:name "ccABCDEFG.o" .
+:f7 b:size 1000 .
+:f7 b:hash "7700000000000000000000000000000000000007" .
+
+# Vendor header (no RPM)
+:f8 a b:file .
+:f8 b:abspath "/home/user/project/src/third_party/sqlite/sqlite3.h" .
+:f8 b:name "sqlite3.h" .
+:f8 b:size 3000 .
+:f8 b:hash "8800000000000000000000000000000000000008" .
+
+# System .so with RPM that has no linker reader (to test UNKNOWN path)
+:f9 a b:file .
+:f9 b:abspath "/usr/lib64/libfoo.so.2" .
+:f9 b:name "libfoo.so.2" .
+:f9 b:size 15000 .
+:f9 b:hash "9900000000000000000000000000000000000009" .
+
+# ── Processes ──────────────────────────────────────────────────────────────────
+
+# cc1 compiler: reads system header, vendor source+header, project source, temp
+:p0 a b:process .
+:p0 b:pid 1000 .
+:p0 b:cmd "cc1 -I/usr/include main.c" .
+:p0 b:executable :f_cc1 .
+:p0 b:reads :f1 .
+:p0 b:reads :f2 .
+:p0 b:reads :f3 .
+:p0 b:reads :f7 .
+:p0 b:reads :f8 .
+:p0 b:reads :f9 .
+
+# ld linker: reads system .so and .a, writes artifact
+:p1 a b:process .
+:p1 b:pid 1001 .
+:p1 b:cmd "ld -o myapp main.o -lc -lz" .
+:p1 b:executable :f_ld .
+:p1 b:reads :f4 .
+:p1 b:reads :f5 .
+:p1 b:writes :f6 .

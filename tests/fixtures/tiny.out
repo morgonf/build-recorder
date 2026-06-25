@@ -1,0 +1,45 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# Process: make (parent, manages the build)
+:p0 a b:process .
+:p0 b:pid 1001 .
+:p0 b:cmd "make -C /home/user/project" .
+:p0 b:start "2024-01-15T10:00:00" .
+:p0 b:end "2024-01-15T10:00:05" .
+
+# Process: cc1 (compiler frontend, execd by make)
+:p1 a b:process .
+:p1 b:pid 1002 .
+:p1 b:cmd "/usr/libexec/gcc/x86_64-alt-linux/12/cc1 hello.c -o /tmp/hello.o" .
+:p1 b:start "2024-01-15T10:00:01" .
+:p1 b:end "2024-01-15T10:00:02" .
+
+# File: cc1 compiler executable
+:f0 a b:file .
+:f0 b:abspath "/usr/libexec/gcc/x86_64-alt-linux/12/cc1" .
+:f0 b:name "cc1" .
+:f0 b:size 1234567 .
+:f0 b:hash "da39a3ee5e6b4b0d3255bfef95601890afd80709" .
+
+# File: C source file (project source)
+:f1 a b:file .
+:f1 b:abspath "/home/user/project/hello.c" .
+:f1 b:name "hello.c" .
+:f1 b:size 256 .
+:f1 b:hash "aabbcc0000000000000000000000000000000001" .
+
+# File: compiled object output
+:f2 a b:file .
+:f2 b:abspath "/tmp/hello.o" .
+:f2 b:name "hello.o" .
+:f2 b:size 1024 .
+:f2 b:hash "aabbcc0000000000000000000000000000000002" .
+
+# Relations: process → process
+:p0 b:creates :p1 .
+
+# Relations: process → file
+:p1 b:executable :f0 .
+:p1 b:reads :f1 .
+:p1 b:writes :f2 .
