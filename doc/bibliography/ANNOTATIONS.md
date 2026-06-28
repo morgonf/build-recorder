@@ -295,7 +295,7 @@ PDF-копии — в `pdf/` (не в git).
 
 ### `drexel2025-archverifier` — Independent Verifier for Arch Linux (2025)
 
-- **Статус:** проход 1–2 сделан (Claude, 2026-06-28); PDF: `pdf/drexel2025-archverifier.pdf`. **Не прямой конкурент — самому читать не обязательно** (школа rebuild-and-compare, не атрибуция); ценно полем «Для нас» (certbot-кейс).
+- **Статус:** проход 1–2 сделан (Claude, 2026-06-28); подробный конспект: [translations/drexel2025-archverifier.ru.md](translations/drexel2025-archverifier.ru.md); PDF: `pdf/drexel2025-archverifier.pdf`. **Не прямой конкурент — самому читать не обязательно** (школа rebuild-and-compare, не атрибуция); ценно полем «Для нас» (certbot-кейс).
 - **Тип:** наполовину обзор-туториал (R-B / bootstrappable builds / Diverse Double-Compiling за 10 лет), наполовину инженерный вклад. Венью — **SICHERHEIT 2024** (GI/LNI, doi:10.18420/sicherheit2024_016), arXiv-препринт 2505.21642 выложен май 2025 (отсюда «2025» в ключе; фактически работа 2024 г.). Авторы — HSLU (Люцерна) + ETH Zürich.
 - **Обзорная часть (полезные числа для введения):** причины невоспроизводимости из 422 задокументированных кейсов — таймстемпы 30%, рандомизация 17%, пути 16%. Доли воспроизводимости (ноябрь 2023): Debian 95,2% (Bookworm/amd64), Arch 75,8%. Инструментарий школы: `diffoscope` (бинарный diff в читаемый вид), `rebuilderd` (kpcyrd) — демон, раздающий пересборку воркерам и отдающий статус GOOD/BAD/UNKWN.
 - **Вклад (новое в статье):**
