@@ -1,5 +1,19 @@
 # Рабочие заметки по библиографии
 
+## 2026-06-28: добор — 11 новых источников, база выросла с 36 до 47 записей
+
+Поиск свежих публикаций (WebSearch, 2024–2026). Все 11 добавлены в papers.bib +
+ANNOTATIONS.md с полем «Чего НЕТ / Для нас». Разбивка по целям:
+
+- **Цель 1 (трассировка):** `shen2024-aschook` (ASC-Hook, ARM-only syscall hook без ptrace — держать на случай ARM64).
+- **Цель 2 (идентификация компонентов):** `jiang2024-binaryai` (BinaryAI, ICSE 2024 — сильнейший ML binary-to-source, читать самому), `kim2025-bm25sca` (cross-language BM25 SCA, IJIS 2025).
+- **Позиционирование / доверенная сборка:** `ron2026-zkcompile` (zkVM-компиляция — новейший конкурирующий путь, читать самому), `malka2026-lila` (Nix-reproducibility мониторинг), `drexel2025-archverifier` (независимый верификатор Arch), `dietrich2026-mavenrebuild` (вариативность исходников при пересборке Maven), `ozkan2024-sbomintegrity` (подмена SBOM инсайдером), `ishgair2024-sok` (SoK supply chain, модель AStRA).
+- **Phantom deps:** `larson2025-phantom` (white paper Ларсона, обоснование PEP 770).
+- **Патенты:** `patent2025-12229279` (Binarly, CBOM из бинарников, B1).
+
+Приоритет на чтение (проход 3, самому): `jiang2024-binaryai`, `ron2026-zkcompile`.
+TODO по метаданным: `kim2025-bm25sca` — полные имена авторов (только инициалы Kim J.W. / Choi M.J.).
+
 ## 2026-06-09: итоги поиска — 20 новых источников, база выросла с 16 до 36 записей
 
 Все добавлены в papers.bib + ANNOTATIONS.md с полем «Для нас» — как именно источник

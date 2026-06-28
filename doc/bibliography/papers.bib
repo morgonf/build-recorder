@@ -84,6 +84,16 @@
   url    = {https://words.filippo.io/compromise-survey/}
 }
 
+@misc{ishgair2024-sok,
+  author        = {Abu Ishgair, Eman and Melara, Marcela S. and Torres-Arias, Santiago},
+  title         = {SoK: A Defense-Oriented Evaluation of Software Supply Chain Security},
+  year          = {2024},
+  eprint        = {2405.14993},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2405.14993},
+  note          = {Модель AStRA: систематизация элементов supply chain и оценка защит}
+}
+
 % ============================================================
 % Смежные работы той же лаборатории (ИСП РАН)
 % ============================================================
@@ -142,6 +152,16 @@
   year  = {2025},
   url   = {https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12608121/},
   note  = {TODO: уточнить авторов и venue}
+}
+
+@misc{shen2024-aschook,
+  author        = {Shen, Yang and Xie, Min and Zhang, Wenzhe and Wu, Tao},
+  title         = {ASC-Hook: fast and transparent system call hook for Arm},
+  year          = {2024},
+  eprint        = {2412.05784},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2412.05784},
+  note          = {Гибридная замена инструкций + трамплин; overhead ~3,7 %, в ~29x меньше аналогов. ARM-only}
 }
 
 % ============================================================
@@ -205,6 +225,28 @@
   note      = {TODO: уточнить авторов}
 }
 
+@inproceedings{jiang2024-binaryai,
+  author        = {Jiang, Ling and An, Junwen and Huang, Huihui and Tang, Qiyi and Nie, Sen and Wu, Shi and Zhang, Yuqun},
+  title         = {BinaryAI: Binary Software Composition Analysis via Intelligent Binary Source Code Matching},
+  booktitle     = {Proc. 46th International Conference on Software Engineering (ICSE)},
+  year          = {2024},
+  doi           = {10.1145/3597503.3639100},
+  eprint        = {2401.11161},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2401.11161},
+  note          = {Transformer-эмбеддинги функций + link-time locality; TPL precision 73->86 % vs Black Duck}
+}
+
+@article{kim2025-bm25sca,
+  author  = {Kim, J. W. and Choi, M. J.},
+  title   = {A cross-language and cross-binary type approach to binary-source software composition analysis using BM25},
+  journal = {International Journal of Information Security},
+  year    = {2025},
+  doi     = {10.1007/s10207-025-01148-3},
+  url     = {https://link.springer.com/article/10.1007/s10207-025-01148-3},
+  note    = {Binary-source SCA для 5 языков (C/C++, Obj-C, Swift, Go); BM25-токены; recall до 81,4 %. TODO: полные имена авторов}
+}
+
 % ============================================================
 % Предсобранные бинарники / phantom dependencies в экосистемах
 % ============================================================
@@ -222,6 +264,16 @@
   organization = {Python Software Foundation},
   url          = {https://peps.python.org/pep-0770/},
   note         = {SBOM для phantom binary dependencies в wheel}
+}
+
+@misc{larson2025-phantom,
+  author       = {Larson, Seth},
+  title        = {Unmasking Phantom Dependencies with Software Bill-of-Materials as Ecosystem-Neutral Metadata},
+  organization = {Python Software Foundation; Alpha-Omega},
+  year         = {2025},
+  month        = {8},
+  url          = {https://alpha-omega.dev/blog/unmasking-phantom-dependencies-with-software-bill-of-materials-as-ecosystem-neutral-metadata-white-paper-by-seth-larson-python-software-foundation/},
+  note         = {White paper, обоснование PEP 770; пример Pillow/libwebp CVE-2023-4863}
 }
 
 @misc{android2024-vendorblobs,
@@ -264,6 +316,16 @@
   note          = {TODO: уточнить авторов}
 }
 
+@misc{ozkan2024-sbomintegrity,
+  author        = {Ozkan, Can and Zou, Xinhai and Singelee, Dave},
+  title         = {Supply Chain Insecurity: The Lack of Integrity Protection in SBOM Solutions},
+  year          = {2024},
+  eprint        = {2412.05138},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2412.05138},
+  note          = {SBOM-генераторы уязвимы к скрытой подмене инсайдером (v3 от 2025-04-22)}
+}
+
 % ============================================================
 % Frameworks: attestation / reproducible builds
 % ============================================================
@@ -293,6 +355,46 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2505.02521},
   note          = {TODO: уточнить авторов}
+}
+
+@misc{ron2026-zkcompile,
+  author        = {Ron, Javier and Monperrus, Martin},
+  title         = {Verifiable Provenance of Software Artifacts with Zero-Knowledge Compilation},
+  year          = {2026},
+  eprint        = {2602.11887},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2602.11887},
+  note          = {zkVM-компиляция: криптодоказательство «бинарь собран из заявленного исходника заявленным компилятором»}
+}
+
+@misc{malka2026-lila,
+  author        = {Malka, Julien and Engelen, Arnout},
+  title         = {Lila: Decentralized Build Reproducibility Monitoring for the Functional Package Management Model},
+  year          = {2026},
+  eprint        = {2601.20662},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2601.20662},
+  note          = {Децентрализованный мониторинг воспроизводимости для функциональной (Nix-подобной) модели}
+}
+
+@misc{drexel2025-archverifier,
+  author        = {Drexel, Joshua and H{\"a}nggi, Esther and M{\'e}ndez Veiga, Iy{\'a}n},
+  title         = {Reproducible Builds and Insights from an Independent Verifier for Arch Linux},
+  year          = {2025},
+  eprint        = {2505.21642},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2505.21642},
+  note          = {Независимый rebuilder/verifier; нашёл невоспроизводимость в certbot- и fwupd-пакетах}
+}
+
+@misc{dietrich2026-mavenrebuild,
+  author        = {Dietrich, Jens and Hassanshahi, Behnaz},
+  title         = {On the Variability of Source Code in Maven Package Rebuilds},
+  year          = {2026},
+  eprint        = {2602.19383},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2602.19383},
+  note          = {Источник вариативности при пересборке — build-extensions, генерирующие код}
 }
 
 % ============================================================
@@ -351,4 +453,12 @@
   year   = {2017},
   note   = {Assignee: IBM; найден через prior art US 12,164,911. TODO: прочитать},
   url    = {https://patents.google.com/patent/US9535687B2/en}
+}
+
+@misc{patent2025-12229279,
+  author = {Matrosov, Alexander and Thomas, Sam Lloyd and Vasilenko, Yegor},
+  title  = {US Patent 12,229,279 B1: Cryptography bill of materials (CBOM) generation from binary executables},
+  year   = {2025},
+  note   = {Assignee: Binarly Inc; подача 2024-10-25, выдача 2025-02-18},
+  url    = {https://patents.google.com/patent/US12229279B1/en}
 }
