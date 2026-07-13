@@ -435,6 +435,42 @@ handle_create_process(PROCESS_INFO *pi, pid_t child)
     record_process_create(pi->outname, child_pi->outname);
 }
 
+// Reap a finished process — normal exit or death by signal. Files a process
+// wrote are normally hashed at close(); any it left open at exit would lose
+// their content, so hash the remaining per-process (write) entries first. Then
+// record the process end and drop it from the tables.
+static void
+reap_process(pid_t pid)
+{
+    PROCESS_INFO *process_state = find_pinfo(pid);
+
+    if (!process_state) {
+	error(EXIT_FAILURE, 0, "find_pinfo on process reap");
+    }
+
+    // numfinfo is the index of the last entry (starts at -1), not a count.
+    for (int i = 0; i <= process_state->numfinfo; ++i) {
+	FILE_INFO *f = &process_state->finfo[i];
+
+	f->hash = get_file_hash(f->abspath);
+	record_hash(f->outname, f->hash);
+    }
+
+    record_process_end(process_state->outname);
+
+    free(process_state->cmd_line);
+    free(process_state->finfo);
+    free(process_state->fds);
+
+    for (int i = process_state - pinfo; i < numpinfo; ++i) {
+	pinfo[i] = pinfo[i + 1];
+    }
+    for (int i = process_state - pinfo; i < numpinfo; ++i) {
+	pids[i] = pids[i + 1];
+    }
+    --numpinfo;
+}
+
 static void
 handle_syscall_entry(pid_t pid, PROCESS_INFO *pi)
 {
@@ -750,27 +786,15 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 	    if (ptrace(PTRACE_SYSCALL, pid, NULL, restart_sig) < 0) {
 		error(EXIT_FAILURE, errno, "failed restarting process");
 	    }
-	} else if (WIFEXITED(status)) {	// child process exited 
+	} else if (WIFEXITED(status)) {	// child process exited
 	    --running;
-
-	    process_state = find_pinfo(pid);
-	    if (!process_state) {
-		error(EXIT_FAILURE, 0, "find_pinfo on WIFEXITED");
-	    }
-
-	    record_process_end(process_state->outname);
-
-	    free(process_state->cmd_line);
-	    free(process_state->finfo);
-	    free(process_state->fds);
-
-	    for (int i = process_state - pinfo; i < numpinfo; ++i) {
-		pinfo[i] = pinfo[i + 1];
-	    }
-	    for (int i = process_state - pinfo; i < numpinfo; ++i) {
-		pids[i] = pids[i + 1];
-	    }
-	    --numpinfo;
+	    reap_process(pid);
+	} else if (WIFSIGNALED(status)) {	// child killed by a signal
+	    // Previously unhandled: a tracee dying on a signal left `running`
+	    // undecremented and its writes unhashed, desyncing the tables and
+	    // truncating the graph. Reap it the same as a normal exit.
+	    --running;
+	    reap_process(pid);
 	}
     }
 }

@@ -35,6 +35,16 @@ record_start(char *fname)
     fprintf(fout, "\n\n");
 }
 
+void
+record_stop(void)
+{
+    if (fout != NULL) {
+	fflush(fout);
+	fclose(fout);
+	fout = NULL;
+    }
+}
+
 static void
 record_triple(char *s, const char *p, char *o, bool o_as_string)
 {
