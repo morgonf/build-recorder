@@ -271,8 +271,18 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     path = get_str_from_process(pid, path);
     char *abspath = absolutepath(pid, dirfd, path);
 
-    if (abspath == NULL)
-	error(EXIT_FAILURE, errno, "on handle_open absolutepath");
+    if (abspath == NULL) {
+	// The open succeeded (we only reach here on rval >= 0) yet the path
+	// does not resolve to a real absolute name — typically a magic /proc
+	// or /sys entry: a /proc/<pid>/ns/* symlink (upstream #226) or the
+	// .NET runtime probing /sys/devices/system/cpu at startup. Skip it:
+	// an unresolvable path simply gets no provenance node, instead of a
+	// fatal error that aborted the whole trace on the first such open.
+	// Genuine coverage gaps surface downstream as outputs with no source
+	// lineage, not as a lost graph.
+	free(path);
+	return;
+    }
 
     FILE_INFO *f = NULL;
 
