@@ -118,6 +118,7 @@ AC_CHECK_DECL([SYS_link], [AC_DEFINE([HAVE_SYS_LINK], [1], [[Define if SYS_link 
 AC_CHECK_DECL([SYS_linkat], [AC_DEFINE([HAVE_SYS_LINKAT], [1], [[Define if SYS_linkat is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_open], [AC_DEFINE([HAVE_SYS_OPEN], [1], [[Define if SYS_open is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_openat], [AC_DEFINE([HAVE_SYS_OPENAT], [1], [[Define if SYS_openat is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_openat2], [AC_DEFINE([HAVE_SYS_OPENAT2], [1], [[Define if SYS_openat2 is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_rename], [AC_DEFINE([HAVE_SYS_RENAME], [1], [[Define if SYS_rename is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_renameat2], [AC_DEFINE([HAVE_SYS_RENAMEAT2], [1], [[Define if SYS_renameat2 is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_renameat], [AC_DEFINE([HAVE_SYS_RENAMEAT], [1], [[Define if SYS_renameat is available]])],, [#include <sys/syscall.h>])

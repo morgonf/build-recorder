@@ -579,6 +579,20 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    handle_open(pid, pi, fd, dirfd, path, flags);
 	    break;
 #endif
+#ifdef HAVE_SYS_OPENAT2
+	case SYS_openat2:
+	    // int openat2(int dirfd, const char *pathname,
+	    // struct open_how *how, size_t size);
+	    // struct open_how begins with a __u64 flags field; read that one
+	    // word from the tracee rather than depend on <linux/openat2.h>.
+	    fd = (int) rval;
+	    dirfd = (int) pi->args[0];
+	    path = (void *) pi->args[1];
+	    flags = (int) ptrace(PTRACE_PEEKDATA, pid, (void *) pi->args[2], NULL);
+
+	    handle_open(pid, pi, fd, dirfd, path, flags);
+	    break;
+#endif
 #ifdef HAVE_SYS_CLOSE
 	case SYS_close:
 	    // int close(int fd);
