@@ -104,6 +104,12 @@ b:rename a rdf:Property ;
     rdfs:range b:file ;
     rdfs:comment "Indicates that a process renamed a file." .
 
+b:hardlink a rdf:Property ;
+    rdfs:label "Hardlink" ;
+    rdfs:domain b:process ;
+    rdfs:range b:file ;
+    rdfs:comment "Indicates that a process hardlinked a file; the new name shares the exact content (and hash) of the existing inode." .
+
 # Package provenance (added by enrich.py post-processing)
 b:rpm_package a rdf:Property ;
     rdfs:label "RPM package (NEVRA)" ;

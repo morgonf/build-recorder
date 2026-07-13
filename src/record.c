@@ -204,6 +204,19 @@ record_rename(char *poutname, char *from_foutname, char *to_foutname)
 }
 
 void
+record_hardlink(char *poutname, char *from_foutname, char *to_foutname)
+{
+    static int hardlink = 0;
+    char unnamed_mod[24];
+
+    sprintf(unnamed_mod, "_:hardlink%d", hardlink++);
+
+    record_triple(poutname, "b:hardlink", unnamed_mod, false);
+    record_triple(unnamed_mod, "b:hardlink-from", from_foutname, false);
+    record_triple(unnamed_mod, "b:hardlink-to", to_foutname, false);
+}
+
+void
 record_hash(char *foutname, char *hash)
 {
     if (hash != NULL)

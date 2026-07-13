@@ -386,6 +386,32 @@ handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
     record_rename(pi->outname, from->outname, to->outname);
 }
 
+// A hardlink creates a new name for the same inode: the new path has the exact
+// content (and hash) of the existing one. Reuses handle_rename_entry to resolve
+// and hash the source, but emits b:hardlink (the old name still exists, unlike
+// rename). This closes the invisible-incorporation hole where a prebuilt binary
+// is `ln`ed into the build tree with no open/read/write to observe.
+static void
+handle_link_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
+{
+    if ((ptrdiff_t) pi->entry_info < 0) {
+	free(newpath);
+	return;
+    }
+
+    FILE_INFO *from = finfo + (ptrdiff_t) pi->entry_info;
+
+    char *abspath = absolutepath(pid, newdirfd, newpath);
+
+    FILE_INFO *to = next_finfo();
+
+    finfo_new(to, newpath, abspath, from->hash);
+    record_file(to->outname, newpath, abspath);
+    record_hash(to->outname, to->hash);
+
+    record_hardlink(pi->outname, from->outname, to->outname);
+}
+
 static void
 handle_create_process(PROCESS_INFO *pi, pid_t child)
 {
@@ -426,6 +452,22 @@ handle_syscall_entry(pid_t pid, PROCESS_INFO *pi)
 	case SYS_renameat2:
 	    // int renameat2(int olddirfd, const char *oldpath, int newdirfd,
 	    // const char *newpath, unsigned int flags);
+	    olddirfd = pi->args[0];
+	    oldpath = get_str_from_process(pid, (void *) pi->args[1]);
+	    handle_rename_entry(pid, pi, olddirfd, oldpath);
+	    break;
+#endif
+#ifdef HAVE_SYS_LINK
+	case SYS_link:
+	    // int link(const char *oldpath, const char *newpath);
+	    oldpath = get_str_from_process(pid, (void *) pi->args[0]);
+	    handle_rename_entry(pid, pi, AT_FDCWD, oldpath);
+	    break;
+#endif
+#ifdef HAVE_SYS_LINKAT
+	case SYS_linkat:
+	    // int linkat(int olddirfd, const char *oldpath, int newdirfd,
+	    // const char *newpath, int flags);
 	    olddirfd = pi->args[0];
 	    oldpath = get_str_from_process(pid, (void *) pi->args[1]);
 	    handle_rename_entry(pid, pi, olddirfd, oldpath);
@@ -564,6 +606,24 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    newpath = get_str_from_process(pid, (void *) pi->args[3]);
 
 	    handle_rename_exit(pid, pi, newdirfd, newpath);
+	    break;
+#endif
+#ifdef HAVE_SYS_LINK
+	case SYS_link:
+	    // int link(const char *oldpath, const char *newpath);
+	    newpath = get_str_from_process(pid, (void *) pi->args[1]);
+
+	    handle_link_exit(pid, pi, AT_FDCWD, newpath);
+	    break;
+#endif
+#ifdef HAVE_SYS_LINKAT
+	case SYS_linkat:
+	    // int linkat(int olddirfd, const char *oldpath, int newdirfd,
+	    // const char *newpath, int flags);
+	    newdirfd = pi->args[2];
+	    newpath = get_str_from_process(pid, (void *) pi->args[3]);
+
+	    handle_link_exit(pid, pi, newdirfd, newpath);
 	    break;
 #endif
 #ifdef HAVE_SYS_FORK
