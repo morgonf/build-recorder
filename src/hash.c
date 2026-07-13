@@ -26,25 +26,39 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 				       // EVP_DigestUpdate(),
 				       // EVP_DigestFinal_ex()
 
-#define SHA1_OUTPUT_LEN 20
-#define SHA1_HEXBUF_LEN (2 * SHA1_OUTPUT_LEN + 1)
-
-#define	ZERO_FILE_HASH	"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
-
 #include	"hash.h"
 
+// Digest algorithm for git-blob hashing. Default SHA-1 keeps b:hash values
+// git-compatible (upstream / RPM matching); "sha256" selects a collision-
+// resistant digest for integrity-grade provenance (threat model, T-hash).
+static const EVP_MD *hash_md;
+
+void
+hash_set_algorithm(const char *name)
+{
+    hash_md = (name && !strcmp(name, "sha256")) ? EVP_sha256() : EVP_sha1();
+}
+
+static const EVP_MD *
+current_md(void)
+{
+    if (hash_md == NULL)
+	hash_md = EVP_sha1();
+    return hash_md;
+}
+
 static char *
-hash_to_str(uint8_t *h)
+hash_to_str(const unsigned char *h, unsigned int n)
 {
     char *hash;
     char *ph;
 
-    ph = hash = malloc(SHA1_HEXBUF_LEN);
+    ph = hash = malloc(2 * n + 1);
     if (hash == NULL) {
 	return NULL;
     }
 
-    for (int i = 0; i < SHA1_OUTPUT_LEN; i++) {
+    for (unsigned int i = 0; i < n; i++) {
 #define TO_HEX(i)       "0123456789abcdef"[i]
 	*ph++ = TO_HEX(h[i] >> 4);
 	*ph++ = TO_HEX(h[i] & 0xF);
@@ -53,7 +67,31 @@ hash_to_str(uint8_t *h)
     return hash;
 }
 
-static uint8_t *
+// git-blob digest of a buffer: hash "blob <sz>\0" then the content, using the
+// currently selected algorithm. Returns a malloc'd hex string.
+static char *
+git_blob_digest(const unsigned char *buf, size_t sz)
+{
+    char pre[32];
+    size_t presize = sprintf(pre, "blob %zu%c", sz, 0);
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+    EVP_DigestInit_ex(ctx, current_md(), NULL);
+    EVP_DigestUpdate(ctx, pre, presize);
+    if (sz > 0)
+	EVP_DigestUpdate(ctx, buf, sz);
+    EVP_DigestFinal_ex(ctx, digest, &dlen);
+
+    EVP_MD_CTX_free(ctx);
+
+    return hash_to_str(digest, dlen);
+}
+
+static char *
 hash_file_contents(char *name, size_t sz)
 {
     int fd = open(name, O_RDONLY);
@@ -66,48 +104,20 @@ hash_file_contents(char *name, size_t sz)
 
     if (buf == MAP_FAILED) {
 	error(0, errno, "mmaping `%s'", name);
+	close(fd);
 	return NULL;
     }
-    int ret = madvise(buf, sz, MADV_SEQUENTIAL);
-
-    if (ret) {
+    if (madvise(buf, sz, MADV_SEQUENTIAL))
 	error(0, errno, "madvise `%s'", name);
-    }
 
-    char pre[32];
-    size_t presize;
-
-    presize = sprintf(pre, "blob %lu%c", sz, 0);
-
-    unsigned char *hash;
-
-    hash = malloc(SHA1_OUTPUT_LEN);
-    if (hash == NULL) {
-	error(0, errno, "malloc output on `%s'", name);
-	return NULL;
-    }
-
-    const static EVP_MD *sha1_md;
-
-    if (sha1_md == 0)
-	sha1_md = EVP_sha1();
-
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-
-    EVP_DigestInit_ex(ctx, sha1_md, NULL);
-    EVP_DigestUpdate(ctx, pre, presize);
-    EVP_DigestUpdate(ctx, buf, sz);
-    EVP_DigestFinal_ex(ctx, hash, NULL);
-
-    EVP_MD_CTX_free(ctx);
+    char *ret = git_blob_digest((const unsigned char *) buf, sz);
 
     close(fd);
 
-    if (munmap(buf, sz) < 0) {
+    if (munmap(buf, sz) < 0)
 	error(EXIT_FAILURE, errno, "unmapping `%s'", name);
-    }
 
-    return hash;
+    return ret;
 }
 
 char *
@@ -122,20 +132,9 @@ get_file_hash(char *fname)
     if (S_ISREG(fstat.st_mode) || S_ISLNK(fstat.st_mode)) {
 	size_t sz = fstat.st_size;
 
-	if (sz > 0) {
-	    uint8_t *h = hash_file_contents(fname, sz);
-
-	    if (h == NULL)
-		return NULL;
-
-	    char *ret = hash_to_str(h);
-
-	    free(h);
-	    return ret;
-	} else {
-	    return strdup(ZERO_FILE_HASH);
-	}
-    } else {
-	return NULL;
+	if (sz > 0)
+	    return hash_file_contents(fname, sz);
+	return git_blob_digest(NULL, 0);   // empty-file git-blob hash
     }
+    return NULL;
 }

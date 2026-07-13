@@ -16,6 +16,7 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include <unistd.h>
 
 #include "record.h"
+#include "hash.h"
 
 void run_and_record_fnames(char **av, char **envp);
 
@@ -40,12 +41,21 @@ main(int argc, char **argv, char **envp)
 
     char *output_fname = "build-recorder.out";
 
-    if (!strcmp(argv[1], "-o")) {
-	output_fname = argv[2];
-	argv += 3;
-    } else {
-	argv += 1;
+    ++argv;			       // skip our own argv[0]
+    while (*argv && argv[0][0] == '-') {
+	if (!strcmp(*argv, "-o") && argv[1]) {
+	    output_fname = argv[1];
+	    argv += 2;
+	} else if (!strcmp(*argv, "-2") || !strcmp(*argv, "--sha256")) {
+	    hash_set_algorithm("sha256");
+	    ++argv;
+	} else {
+	    break;
+	}
     }
+
+    if (!*argv)
+	error(EX_USAGE, 0, "missing command to record");
 
     record_start(output_fname);
 
