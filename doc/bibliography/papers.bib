@@ -43,6 +43,16 @@
   note   = {GitHub-репозиторий}
 }
 
+@misc{omnibor2024-adg,
+  author        = {Seshadri, Bharathi and Han, Yongkui and Olson, Chris and Pollak, David and Tomasevic, Vojislav},
+  title         = {OmniBOR: A System for Automatic, Verifiable Artifact Resolution across Software Supply Chains},
+  year          = {2024},
+  eprint        = {2402.08980},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2402.08980},
+  note          = {Artifact Dependency Graph по gitoid; ДВА подхода — compiler-based и build-tracing (bomsh/bomtrace, strace); embedding OID в артефакт (напр. @BOM в .class)}
+}
+
 % ============================================================
 % SBOM / enforcement
 % ============================================================
@@ -62,6 +72,26 @@
   organization = {Google, OSV},
   url          = {https://osv.dev/blog/posts/using-the-determineversion-api/},
   note         = {Экспериментальный API: \{path: sha1\} -> ближайший upstream-коммит}
+}
+
+@misc{classport2025-introspection,
+  author        = {Cofano, Serena and Williams, Daniel and Sharma, Aman and Monperrus, Martin},
+  title         = {Classport: Designing Runtime Dependency Introspection for Java},
+  year          = {2025},
+  eprint        = {2510.20340},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2510.20340},
+  note          = {Встраивает информацию о зависимостях в .class-файлы для рантайм-интроспекции JVM (embedding-подход к провенансу байткода)}
+}
+
+@misc{sbomexe2024,
+  author        = {Sharma, Aman and Wittlinger, Martin and Baudry, Benoit and Monperrus, Martin},
+  title         = {SBOM.EXE: Countering Dynamic Code Injection based on Software Bill of Materials in Java},
+  year          = {2024},
+  eprint        = {2407.00246},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2407.00246},
+  note          = {Allowlist допустимых классов из SBOM, enforcement при динамической загрузке классов JVM (защита от Log4Shell-подобных инъекций)}
 }
 
 % ============================================================
@@ -164,6 +194,37 @@
   note          = {Гибридная замена инструкций + трамплин; overhead ~3,7 %, в ~29x меньше аналогов. ARM-only}
 }
 
+@inproceedings{wang2018-lprov,
+  author    = {Wang, Fei and Kwon, Yonghwi and Ma, Shiqing and Zhang, Xiangyu and Xu, Dongyan},
+  title     = {Lprov: Practical Library-aware Provenance Tracing},
+  booktitle = {Annual Computer Security Applications Conference (ACSAC)},
+  year      = {2018},
+  doi       = {10.1145/3274694.3274751},
+  url       = {https://dl.acm.org/doi/10.1145/3274694.3274751},
+  note      = {Провенанс с учётом библиотек: комбинирует kernel audit-log и user-space stack unwinding — гранулярность на уровне библиотек, не только процессов}
+}
+
+@inproceedings{ma2016-protracer,
+  author    = {Ma, Shiqing and Zhang, Xiangyu and Xu, Dongyan},
+  title     = {ProTracer: Towards Practical Provenance Tracing by Alternating Between Logging and Tainting},
+  booktitle = {Network and Distributed System Security Symposium (NDSS)},
+  year      = {2016},
+  url       = {https://www.ndss-symposium.org/wp-content/uploads/2017/09/protracer-towards-practical-provenance-tracing-alternating-logging-tainting.pdf},
+  note      = {Снижение накладных расходов провенанса чередованием логирования и тайнтинга — приём для Цели 1 (overhead ptrace)}
+}
+
+@inproceedings{grayson2024-provbench,
+  author    = {Grayson, Samuel and Aguilar, Faustino and Milewicz, Reed and Katz, Daniel S. and Marinov, Darko},
+  title     = {A benchmark suite and performance analysis of user-space provenance collectors},
+  booktitle = {Proc. 2nd ACM Conference on Reproducibility and Replicability (ACM REP '24)},
+  address   = {Rennes, France},
+  year      = {2024},
+  pages     = {1--11},
+  doi       = {10.1145/3641525.3663627},
+  url       = {https://dl.acm.org/doi/10.1145/3641525.3663627},
+  note      = {45 провенанс-коллекторов из литературы, 9 воспроизведены; единый бенчмарк-сьют. Компиляция gcc: strace +206 %, CARE +136 %, RR +321 %, ReproZip +344 %, fsatrace (library interposition) +4 %}
+}
+
 % ============================================================
 % Идентификация компонентов: source-level
 % ============================================================
@@ -176,6 +237,16 @@
   doi       = {10.1109/ICSE43902.2021.00083},
   url       = {https://arxiv.org/abs/2102.06182},
   note      = {Код: https://github.com/WOOSEUNGHOON/Centris-public}
+}
+
+@misc{rasheed2026-hiddendeps,
+  author        = {Rasheed, Shawn and McPhee, Max and Patterson, Lisa and MacDonell, Stephen and Dietrich, Jens},
+  title         = {Hidden Dependencies and Component Variants in SBOM-Based Software Composition Analysis},
+  year          = {2026},
+  eprint        = {2604.21278},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2604.21278},
+  note          = {Сканирует ссылки типов в .class (owners вызовов/полей, new, cast, class-литералы) -> маппинг внутренних JVM-имён в компоненты SBOM; hidden deps + варианты компонентов}
 }
 
 % ============================================================
@@ -245,6 +316,17 @@
   doi     = {10.1007/s10207-025-01148-3},
   url     = {https://link.springer.com/article/10.1007/s10207-025-01148-3},
   note    = {Binary-source SCA для 5 языков (C/C++, Obj-C, Swift, Go); BM25-токены; recall до 81,4 %. TODO: полные имена авторов}
+}
+
+@article{zou2025-bincofer,
+  author        = {Zou, Yayi and Zhang, Yixiang and Zhao, Guanghao and Wu, Yueming and Shen, Shuhao and Fu, Cai},
+  title         = {BinCoFer: Three-Stage Purification for Effective C/C++ Binary Third-Party Library Detection},
+  journal       = {Journal of Systems and Software},
+  year          = {2025},
+  eprint        = {2504.19551},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2504.19551},
+  note          = {Детект TPL в бинаре без исходников TPL: BCSD-признаки + трёхступенчатая «очистка» репозитория (core functions, function-level); сравнение с ModX, B2SFinder, LibAM, BinaryAI на датасете ArchLinux}
 }
 
 % ============================================================
@@ -326,6 +408,48 @@
   note          = {SBOM-генераторы уязвимы к скрытой подмене инсайдером (v3 от 2025-04-22)}
 }
 
+@misc{darkmatter2026-uncharted,
+  author        = {Reddypalle, Abhishek and Roellke, Dennis and Torres-Arias, Santiago},
+  title         = {Software Dark Matter: Gazing at Uncharted Files to Navigate SBOM Integrations},
+  year          = {2026},
+  eprint        = {2606.13966},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2606.13966},
+  note          = {Препринт v1 от 11.06.2026, 15 стр.; венью не назначен (в PDF незаполненный шаблон ACM). DARKFILES: файлы в артефакте, не учтённые метаданными («dark matter»); метрика fidelity; тезис — фиксировать провенанс в момент создания, а не реконструировать постфактум. Автор Torres-Arias — in-toto}
+}
+
+@misc{ali2026-memsbom,
+  author        = {Ali, Hala and Case, Andrew and Ahmed, Irfan},
+  title         = {What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security},
+  year          = {2026},
+  month         = {6},
+  eprint        = {2606.22827},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2606.22827},
+  note          = {MEM-SBOM: плагины Volatility 3, SBOM из runtime-состояния Python-процесса (модули интерпретатора, версии, байткод-граф); 51 приложение, находит пакеты, невидимые статическим SBOM-инструментам. Under review}
+}
+
+@misc{bufalino2025-sbomproof,
+  author        = {Bufalino, Jacopo and Di Francesco, Mario and Blaise, Agathe and Secci, Stefano},
+  title         = {SBOMproof: Beyond Alleged SBOM Compliance for Supply Chain Security of Container Images},
+  year          = {2025},
+  eprint        = {2510.05798},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2510.05798},
+  note          = {Несовместимость SBOM-генераторов и сканеров на пакетах ОС в базовых образах; «SBOM confusion vulnerability» — пропущенные уязвимости из-за расхождения форматов}
+}
+
+@inproceedings{zhou2026-sbomrealitycheck,
+  author    = {Zhou, Li and Dacier, Marc and Konstantinou, Charalambos},
+  title     = {A Reality Check on SBOM-based Vulnerability Management: An Empirical Study and A Path Forward},
+  booktitle = {Proc. 16th ACM Conference on Data and Application Security and Privacy (CODASPY)},
+  year      = {2026},
+  pages     = {255--268},
+  doi       = {10.1145/3800506.3803490},
+  url       = {https://arxiv.org/abs/2511.20313},
+  note      = {2414 репозиториев: lock-файлы дают точный SBOM, но сканеры выдают 92,0 % ложных срабатываний; анализ вызовов функций снимает 61,9 % из них}
+}
+
 % ============================================================
 % Frameworks: attestation / reproducible builds
 % ============================================================
@@ -377,6 +501,30 @@
   note          = {Децентрализованный мониторинг воспроизводимости для функциональной (Nix-подобной) модели}
 }
 
+@inproceedings{malka2025-nixrepro,
+  author        = {Malka, Julien and Zacchiroli, Stefano and Zimmermann, Th{\'e}o},
+  title         = {Does Functional Package Management Enable Reproducible Builds at Scale? Yes},
+  booktitle     = {Proc. 22nd International Conference on Mining Software Repositories (MSR)},
+  address       = {Ottawa, Canada},
+  year          = {2025},
+  eprint        = {2501.15919},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2501.15919},
+  note          = {~710 тыс. пакетов nixpkgs, срезы 2017–2023: побитовая воспроизводимость 69–91 %, rebuildability >99 %; ~15 % отказов — вшитые даты сборки. Датасет со статусами, логами и diffoscope}
+}
+
+@article{choi2026-sbomattest,
+  author  = {Choi, Yiseul and Kim, Junga and Hong, Jun-Ho and Kim, Seongmin},
+  title   = {Attestation-based verification of SBOM integrity via consumer-side reproducibility},
+  journal = {ICT Express},
+  volume  = {12},
+  number  = {6},
+  year    = {2026},
+  doi     = {10.1016/j.icte.2026.06.009},
+  url     = {https://www.sciencedirect.com/science/article/pii/S2405959526001086},
+  note    = {Раскрытие процедуры генерации + воспроизведение SBOM на стороне потребителя + эталонный дайджест от доверенного центра; 100 образов, ловит подмену артефакта и SBOM за пределами подписи}
+}
+
 @misc{drexel2025-archverifier,
   author        = {Drexel, Joshua and H{\"a}nggi, Esther and M{\'e}ndez Veiga, Iy{\'a}n},
   title         = {Reproducible Builds and Insights from an Independent Verifier for Arch Linux},
@@ -395,6 +543,17 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2602.19383},
   note          = {Источник вариативности при пересборке — build-extensions, генерирующие код}
+}
+
+@article{sharma2025-unreproducible,
+  author        = {Sharma, Aman and Baudry, Benoit and Monperrus, Martin},
+  title         = {Causes and Canonicalization of Unreproducible Builds in Java},
+  journal       = {IEEE Transactions on Software Engineering},
+  year          = {2025},
+  eprint        = {2504.21679},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2504.21679},
+  note          = {Таксономия 6 корневых причин невоспроизводимости Java-сборок (манифесты, SBOM, ФС, байткод JVM, версии, таймстемпы); канонизация байткода (jNorm, OSS-Rebuild)}
 }
 
 % ============================================================
@@ -461,4 +620,12 @@
   year   = {2025},
   note   = {Assignee: Binarly Inc; подача 2024-10-25, выдача 2025-02-18},
   url    = {https://patents.google.com/patent/US12229279B1/en}
+}
+
+@misc{patent2025-12333020,
+  author = {Bussell, Frank Joseph and Lyons, Henry James and Schwerzler, Nicholas Allan and Yeralan, Sencer Nuri and Rolf, Dale Russel and Tran, Minh Trong and Janson, David John and Yaryan, Thomas George and McCarty, Ian James},
+  title  = {US Patent 12,333,020 B2: Systems and processes for creating software bill of materials for large distributed builds},
+  year   = {2025},
+  note   = {Assignee: Microsoft Technology Licensing; выдача 2025-06-17. SBOM для больших распределённых сборок: отбрасывает неиспользуемые файлы, добавляет инкорпорированные, но неатрибутированные фрагменты},
+  url    = {https://patents.google.com/patent/US12333020B2/en}
 }
