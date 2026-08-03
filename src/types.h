@@ -48,4 +48,13 @@ typedef struct {
     uint64_t args[6];
     void *entry_info;
     char ignore_one_sigstop;
+    unsigned int coverage_gaps;
 } PROCESS_INFO;
+
+/*
+ * Bits of PROCESS_INFO.coverage_gaps: mechanisms this process used that can
+ * move file content past syscall observation. Recorded per process (once per
+ * kind) so the analysis layer can refuse to claim GREEN on a trace whose
+ * file layer is not, in fact, complete.
+ */
+#define	GAP_IO_URING	0x1u

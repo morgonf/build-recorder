@@ -239,6 +239,15 @@ record_process_create(char *p1outname, char *p2outname)
     record_triple(p1outname, "b:creates", p2outname, false);
 }
 
+// A mechanism this process used that can carry file content past syscall
+// observation (io_uring, ...). The graph stays honest about its own blind
+// spots: an analysis reading these must not claim full file-layer coverage.
+void
+record_coverage_gap(char *poutname, const char *kind)
+{
+    record_triple(poutname, "b:coverage_gap", (char *) kind, true);
+}
+
 void
 record_exec(char *poutname, char *foutname)
 {

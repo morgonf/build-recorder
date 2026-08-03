@@ -106,6 +106,7 @@ pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
     self->finfo = malloc(self->finfo_size * sizeof (FILE_INFO));
     self->fds = malloc(self->finfo_size * sizeof (int));
     self->ignore_one_sigstop = ignore_one_sigstop;
+    self->coverage_gaps = 0;
 }
 
 void
@@ -422,6 +423,23 @@ handle_link_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
     record_hardlink(pi->outname, from->outname, to->outname);
 }
 
+// Record, once per process and kind, that this process used a mechanism able to
+// perform file I/O without the syscalls we observe. io_uring is the important
+// one: IORING_OP_OPENAT/READ/WRITE/LINKAT go through the ring, and under
+// SQPOLL a kernel thread runs them with no syscall at all, so opens and writes
+// simply do not appear. We cannot see through it here (that needs a different
+// capture backend), but a trace that stays silent about it would let the
+// analysis report a clean GREEN over a file layer that is not complete.
+static void
+note_coverage_gap(PROCESS_INFO *pi, unsigned int bit, const char *kind)
+{
+    if (pi->coverage_gaps & bit)
+	return;
+
+    pi->coverage_gaps |= bit;
+    record_coverage_gap(pi->outname, kind);
+}
+
 static void
 handle_create_process(PROCESS_INFO *pi, pid_t child)
 {
@@ -702,6 +720,21 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	case SYS_clone:
 	    // int clone(...);
 	    handle_create_process(pi, rval);
+	    break;
+#endif
+#ifdef HAVE_SYS_IO_URING_SETUP
+	case SYS_io_uring_setup:
+	    // int io_uring_setup(u32 entries, struct io_uring_params *p);
+	    // A ring exists from here on; its operations bypass this tracer.
+	    note_coverage_gap(pi, GAP_IO_URING, "io_uring");
+	    break;
+#endif
+#ifdef HAVE_SYS_IO_URING_ENTER
+	case SYS_io_uring_enter:
+	    // int io_uring_enter(unsigned fd, unsigned to_submit, ...);
+	    // Catches a process submitting on a ring it did not create itself
+	    // (inherited fd, or one passed over a unix socket).
+	    note_coverage_gap(pi, GAP_IO_URING, "io_uring");
 	    break;
 #endif
     }

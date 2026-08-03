@@ -110,6 +110,12 @@ b:hardlink a rdf:Property ;
     rdfs:range b:file ;
     rdfs:comment "Indicates that a process hardlinked a file; the new name shares the exact content (and hash) of the existing inode." .
 
+b:coverage_gap a rdf:Property ;
+    rdfs:label "Coverage gap" ;
+    rdfs:domain b:process ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Names a mechanism the process used that can perform file I/O without the syscalls this tracer observes (currently \"io_uring\"). Its reads and writes may be missing from the graph, so no completeness claim holds for this process." .
+
 # Package provenance (added by enrich.py post-processing)
 b:rpm_package a rdf:Property ;
     rdfs:label "RPM package (NEVRA)" ;
