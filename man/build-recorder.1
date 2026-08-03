@@ -2,16 +2,32 @@
 .\" Copyright (C) 2023 Fotios Valasiadis
 .\" SPDX-License-Identifier: LGPL-2.1-or-later
 
-.TH BUILD-RECORDER 1 "June 5, 2023" "build-recorder"
+.TH BUILD-RECORDER 1 "August 3, 2026" "build-recorder"
 .SH NAME
 build-recorder \- utility to fully record the interactions between assets (files and tools) when a software artifact is being built (compiled)
 .SH SYNOPSIS
 .B build-recorder
-[\-o outfile]
-.Ar command
+[\fB\-o\fR \fIoutfile\fR]
+[\fB\-2\fR | \fB\-\-sha256\fR]
+.I command
 .SH DESCRIPTION
 .B build-recorder
 runs the specified build command until it exits, intercepting the system calls its processes call in an attempt to create a build record, regardless of the programming language, build system, or configuration used.
+.SH OPTIONS
+.TP
+.BI \-o " outfile"
+Write the build record to
+.I outfile
+instead of the default "build-recorder.out".
+.TP
+.BR \-2 ", " \-\-sha256
+Compute
+.B b:hash
+values as git-blob SHA-256 instead of the default git-blob SHA-1. The default keeps hashes interchangeable with git and with package metadata; SHA-256 is collision resistant and is what an adversarial setting calls for, since a practical SHA-1 collision would let a prebuilt binary carry the hash of a file that was built from source. The analysis tools accept either and detect which one a record uses.
+.PP
+Options must precede
+.IR command ;
+the first argument that is not a recognised option starts the command line to record.
 .SH OUTPUT FORMAT
 The information recorded by
 .B build-recorder
@@ -44,6 +60,9 @@ The end timestamp. (Range: xsd:dateTime)
 .TP
 .B b:env
 An environment entry in the form of "VAR=value". (Range: xsd:string)
+.TP
+.B b:coverage_gap
+Names a mechanism the process used whose file I/O this tracer cannot observe, currently "io_uring". Reads and writes performed through it are absent from the record, so no completeness claim holds for that process. Emitted once per process and per mechanism. (Range: xsd:string)
 
 .SS File Properties
 .TP
@@ -72,6 +91,16 @@ Indicates that a process writes a file. (Domain: b:process, Range: b:file)
 .TP
 .B b:executable
 Indicates that a process is an executable file. (Domain: b:process, Range: b:file)
+.TP
+.B b:rename
+Indicates that a process renamed a file. A rename relates two file nodes, the name before and the name after, so the object is a blank node carrying
+.B b:rename\-from
+and
+.BR b:rename\-to .
+Both file nodes hold the same hash, taken on syscall entry. (Domain: b:process)
+.TP
+.B b:hardlink
+Indicates that a process created a hard link, with the same blank-node shape (\fBb:hardlink\-from\fR, \fBb:hardlink\-to\fR). Unlike a rename the old name survives: two names share one inode, hence the same content and hash. Recorded because content entering a build tree this way has no open, read or write to intercept. (Domain: b:process)
 
 .PP
 For an example, please refer to the file doc/output.md included in the project's repository or alternatively with the build-recorder package.

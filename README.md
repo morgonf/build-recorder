@@ -6,10 +6,19 @@ between assets (files and tools)
 when a software artifact is being built (compiled).
 
 ## Usage
-**build-recorder** [-o outfile] command
+**build-recorder** [-o outfile] [-2 | --sha256] command
 * outfile: The output file, by default "build-recorder.out".
+* -2, --sha256: Hash file contents with git-blob SHA-256 instead of the
+  default git-blob SHA-1. The default keeps hashes interchangeable with git
+  and with package metadata; SHA-256 is what an adversarial setting calls
+  for, where a SHA-1 collision could let a prebuilt binary carry the hash of
+  a file that was built from source.
 * command: The original build command with all its arguments.
-    * e.g. cc -o hello helloworld.c 
+    * e.g. cc -o hello helloworld.c
+
+Options must come before the command; the first argument that is not a
+recognised option starts the command line to record. See
+**build-recorder**(1) for the full description.
 
 ## Description
 **build-recorder** is a command line tool for linux 5.3+ that records
@@ -18,7 +27,7 @@ in the background while the build process is running, tracing it
 and extracting all relevant information, which it then stores in the output
 file in RDF Turtle format.
 
-A complete schema for the generated RDF can be found in docs/output.md.
+A complete schema for the generated RDF can be found in doc/output.md.
 
 **build-recorder** works regardless of the programming language, build system
 or configuration used. In fact there is no limitation as to what the supplied 
