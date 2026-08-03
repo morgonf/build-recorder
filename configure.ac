@@ -37,6 +37,10 @@ AC_CHECK_PROG(AWK, awk, [awk])
 AM_CONDITIONAL([HAVE_AWK], [test -n "$AWK"])
 AC_CHECK_PROG(XXD, xxd, [xxd])
 AM_CONDITIONAL([HAVE_XXD], [test -n "$XXD"])
+dnl The analysis layer (enrich/sbom/verify/verdict + brec) is Python; its test
+dnl suite is wired into "make check" when an interpreter is present.
+AC_CHECK_PROGS(PYTHON, [python3 python], [])
+AM_CONDITIONAL([HAVE_PYTHON], [test -n "$PYTHON"])
 
 
 dnl Checks for libraries

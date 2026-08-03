@@ -73,6 +73,28 @@ If you set your `user.name` and `user.email` git configs,
 you can sign your commit automatically with `git commit -s`.
 
 
+## Running the tests
+
+The tracer itself is built with autotools; the analysis layer (`enrich.py`,
+`sbom.py`, `verify-build.py`, `provenance-verdict.py` and the `brec` package)
+is Python and has a `pytest` suite under `tests/`.
+
+```sh
+autoreconf -i && ./configure && make
+make check          # runs the Python suite too, or reports why it skipped it
+python3 -m pytest tests -q      # the same suite on its own
+```
+
+`make check` needs `pytest` on the same interpreter `configure` found; when it
+is missing the suite is skipped with a message instead of failing the build.
+Building the whole tree also needs `xxd` (to embed the RDF schema) and
+`/usr/bin/time`, `awk` and `curl`/`wget` for the benchmark directory.
+
+Both are run on every push by `.github/workflows/ci.yml`, which additionally
+traces a real compilation and a hardlink and checks that the resulting graph
+contains the expected nodes and edges.
+
+
 ## How to contribute
 
 Good Pull Requests
