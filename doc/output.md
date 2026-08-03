@@ -17,6 +17,10 @@ The special types and predicates used are listed below:
 - start: timestamp
 - end: timestamp
 - env: environment entry, in the form of "VAR=value"
+- coverage_gap: names a mechanism the process used whose file I/O this tracer
+  cannot observe (currently `"io_uring"`). Reads and writes performed through it
+  are missing from the graph, so no completeness claim holds for this process.
+  Emitted once per process and per mechanism.
 
 
 
