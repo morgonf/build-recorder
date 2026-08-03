@@ -54,6 +54,40 @@ The special types and predicates used are listed below:
 - Domain: Process
 - Range: File
 
+#### rename
+- Domain: Process
+- Range: a blank node holding the two ends of the rename
+
+A rename relates two file nodes, the name before and the name after, so it is
+not a single predicate on a file; it goes through an intermediate blank node:
+
+```
+:p3         b:rename       _:rename0 .
+_:rename0   b:rename-from  :f7 .
+_:rename0   b:rename-to    :f8 .
+```
+
+Both file nodes carry the same hash: the content is hashed on syscall entry,
+before the operation takes place, and the destination node inherits it.
+
+#### hardlink
+- Domain: Process
+- Range: a blank node holding the two ends of the link
+
+Recorded for `link(2)` and `linkat(2)`, with the same shape as `rename`:
+
+```
+:p3         b:hardlink       _:hardlink0 .
+_:hardlink0 b:hardlink-from  :f7 .
+_:hardlink0 b:hardlink-to    :f8 .
+```
+
+The difference from a rename is that the old name survives: a hardlink gives a
+second name to one inode, so both file nodes share content and hash and both
+paths remain valid. This is worth recording because content entering a build
+tree this way is otherwise unobservable, there being no open, read or write to
+intercept.
+
 
 
 ## Example
