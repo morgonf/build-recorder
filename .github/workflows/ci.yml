@@ -68,22 +68,35 @@ jobs:
           grep -q 'b:hardlink-from' link.out || { echo "hardlink edge missing"; cat link.out; exit 1; }
           grep -q 'b:hardlink-to' link.out
 
-      - name: Verdict with payload closure on the traced build
+      - name: Verdict with payload closure on the traced build (P1)
         run: |
-          # Unenriched, so system libraries carry no package attribution: this
-          # step proves the analysis runs end to end on a real trace and that
-          # the shipped object matches an observed build output, rather than
-          # asserting a colour. 0 GREEN, 1 RED, 3 GREY are all verdicts; 2 is
-          # a usage error and must fail the job.
+          # No package attribution is available here (the only provenance
+          # backend is rpm, and this runner is Debian-based), so system
+          # libraries look foreign and colours are not stable. What is stable,
+          # and what P1 exists for, is the closure itself: a shipped file that
+          # the build produced must match an observed output, and a shipped
+          # file the build never wrote must be reported instead of passing in
+          # silence. Both directions are checked below.
           mkdir -p payload && cp f1.o payload/
+          printf 'never built here\n' > payload/stray.bin
           set +e
           python3 provenance-verdict.py smoke.out --payload payload --json verdict.json
           rc=$?
           set -e
+          # 0 GREEN, 1 RED, 3 GREY are verdicts; 2 is a usage error.
           case $rc in 0|1|3) ;; *) echo "verdict failed with $rc"; exit 1 ;; esac
-          python -c "
-          import json; r = json.load(open('verdict.json'))
-          p = r['payload']
-          assert p['total'] == 1, p
-          assert p['green'] == 1, r['payload_findings']
-          print('payload closure ok:', p)"
+          python - <<'PY'
+          import json
+
+          r = json.load(open("verdict.json"))
+          p = r["payload"]
+          assert p["total"] == 2, p
+          bad = {f["path"]: f["reason"] for f in r["payload_findings"]}
+
+          unobserved = "not present in the build graph"
+          assert unobserved not in bad.get("payload/f1.o", ""), \
+              f"the object the build produced was not matched: {bad}"
+          assert unobserved in bad.get("payload/stray.bin", ""), \
+              f"a file the build never wrote passed the closure: {bad}"
+          print("payload closure ok:", p)
+          PY
