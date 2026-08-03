@@ -128,6 +128,216 @@ def test_clean_build_is_green(out_file, tmp_path):
     assert rep.fidelity == 1.0
 
 
+# ── Coverage gaps (io_uring) ──────────────────────────────────────────────────
+
+GAP_TRIPLE = ':pld b:coverage_gap "io_uring" .\n'
+
+
+def test_parse_coverage_gaps_dedupes_per_process_and_kind(tmp_path):
+    p = tmp_path / "gap.out"
+    p.write_text(OUT + GAP_TRIPLE + GAP_TRIPLE + ':pcc1 b:coverage_gap "io_uring" .\n')
+    gaps = pv.parse_coverage_gaps(p)
+    assert [(g.proc, g.kind) for g in gaps] == [
+        (":pld", "io_uring"), (":pcc1", "io_uring"),
+    ]
+
+
+def test_io_uring_denies_green(tmp_path):
+    """A clean build is no longer GREEN once a process used io_uring."""
+    clean = "\n".join(
+        ln for ln in OUT.splitlines()
+        if not any(t in ln for t in (
+            ":fvenda", ":fapp2", ":pld2", ":fpre", ":fplug", ":fblob",
+            ":pcurl", ":pcp", "hardlink"))
+    )
+    p = tmp_path / "gap.out"
+    p.write_text(clean + "\n" + GAP_TRIPLE)
+
+    rep = pv.compute_verdict(parse_out(p), pv.parse_copies(p), [StubBackend()],
+                             gaps=pv.parse_coverage_gaps(p))
+    assert rep.verdict == "GREY"
+    assert [g.kind for g in rep.coverage_gaps] == ["io_uring"]
+    # the linker's output is what the gap process wrote: its lineage is no
+    # longer trustworthy even though reads were observed
+    by_art = {f.artifact: f for f in rep.findings}
+    assert by_art["/home/u/proj/build/app"].verdict == "GREY"
+    assert "io_uring" in by_art["/home/u/proj/build/app"].reason
+    # main.o came from a process without a gap: still GREEN
+    assert "/home/u/proj/main.o" not in by_art
+
+
+def test_io_uring_gap_alone_denies_green(tmp_path):
+    """Even with nothing observed written through it, a gap forbids GREEN."""
+    p = tmp_path / "gap.out"
+    p.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        ":px a b:process .\n"
+        ':px b:cmd "helper" .\n'
+        ':px b:coverage_gap "io_uring" .\n'
+    )
+    rep = pv.compute_verdict(parse_out(p), [], [StubBackend()],
+                             gaps=pv.parse_coverage_gaps(p))
+    assert rep.verdict == "GREY"
+    assert rep.coverage_gaps[0].cmd == "helper"
+
+
+# ── Payload closure ───────────────────────────────────────────────────────────
+
+def _payload_out(tmp_path, app_hash: str,
+                 abspath: str = "/home/u/proj/buildroot/usr/bin/app") -> Path:
+    """Graph of a build that compiled main.c and linked ./app with that hash."""
+    text = (
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        + _file(":fld", "/usr/bin/ld", "ld")
+        + _file(":fmainc", "/home/u/proj/main.c", "main.c")
+        + ":fapp a b:file .\n"
+        + f':fapp b:abspath "{abspath}" .\n'
+        + ':fapp b:name "app" .\n'
+        + f':fapp b:hash "{app_hash}" .\n'
+        + ":pld a b:process .\n:pld b:executable :fld .\n"
+        + ":pld b:reads :fmainc .\n:pld b:writes :fapp .\n"
+    )
+    p = tmp_path / "payload.out"
+    p.write_text(text)
+    return p
+
+
+@pytest.fixture
+def shipped(tmp_path):
+    root = tmp_path / "buildroot" / "usr" / "bin"
+    root.mkdir(parents=True)
+    app = root / "app"
+    app.write_bytes(b"\x7fELF fake binary\n")
+    return root, app
+
+
+def test_payload_all_observed_is_green(tmp_path, shipped):
+    root, app = shipped
+    out = _payload_out(tmp_path, pv.git_blob_hash(app))
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(root))
+    assert rep.verdict == "GREEN"
+    assert (rep.payload.total, rep.payload.green, rep.payload.grey) == (1, 1, 0)
+    assert rep.fidelity == 1.0
+
+
+def test_payload_file_missing_from_graph_is_grey(tmp_path, shipped):
+    """The P1 case: a shipped file the trace never saw: invisible without this."""
+    root, app = shipped
+    (root / "stray.so").write_bytes(b"written through an unobserved channel\n")
+    out = _payload_out(tmp_path, pv.git_blob_hash(app))
+
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(root))
+    assert rep.verdict == "GREY"
+    assert (rep.payload.total, rep.payload.green, rep.payload.grey) == (2, 1, 1)
+    assert rep.fidelity == 0.5
+    stray = [e for e in rep.payload_entries if e.path.endswith("stray.so")][0]
+    assert stray.status == "grey"
+    assert "without being observed" in stray.reason
+
+
+def test_payload_matches_by_hash_after_relocation(tmp_path, shipped):
+    """Content match, not path match: an extracted package still verifies."""
+    root, app = shipped
+    out = _payload_out(tmp_path, pv.git_blob_hash(app))
+    elsewhere = tmp_path / "extracted" / "usr" / "bin"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "app").write_bytes(app.read_bytes())
+
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(elsewhere))
+    assert rep.verdict == "GREEN"
+    assert rep.payload.green == 1
+
+
+def test_payload_content_changed_after_last_write_is_grey(tmp_path, shipped):
+    """Same path as the observed write, different content: touched afterwards."""
+    root, app = shipped
+    out = _payload_out(tmp_path, pv.git_blob_hash(app), abspath=str(app))
+    app.write_bytes(b"\x7fELF fake binary, patched afterwards\n")
+
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(root))
+    assert rep.verdict == "GREY"
+    assert "differs from every observed version" in rep.payload_entries[0].reason
+
+
+def test_payload_symlinks_are_skipped(tmp_path, shipped):
+    root, app = shipped
+    (root / "app-1.0").symlink_to("app")
+    out = _payload_out(tmp_path, pv.git_blob_hash(app))
+
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(root))
+    assert rep.verdict == "GREEN"
+    assert (rep.payload.total, rep.payload.symlinks) == (1, 1)
+
+
+def test_payload_list_file_falls_back_to_path_check(tmp_path, shipped):
+    """rpm -qpl style input: paths only, no content available locally."""
+    root, app = shipped
+    out = _payload_out(tmp_path, pv.git_blob_hash(app))
+    lst = tmp_path / "files.list"
+    lst.write_text(
+        "# rpm -qpl foo.rpm\n"
+        "/home/u/proj/buildroot/usr/bin/app\n"
+        "/home/u/proj/buildroot/usr/lib64/libmystery.so\n"
+    )
+
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(lst))
+    assert rep.verdict == "GREY"
+    assert (rep.payload.total, rep.payload.unreadable) == (2, 2)
+    by_path = {e.path: e for e in rep.payload_entries}
+    assert by_path["/home/u/proj/buildroot/usr/bin/app"].status == "green"
+    assert by_path["/home/u/proj/buildroot/usr/lib64/libmystery.so"].status == "grey"
+
+
+def test_payload_inherits_red_from_the_output_it_ships(tmp_path):
+    """A shipped file whose content is a RED output makes the package RED."""
+    root = tmp_path / "buildroot"
+    root.mkdir()
+    plug = root / "plugin.so"
+    plug.write_bytes(b"prebuilt content\n")
+    h = pv.git_blob_hash(plug)
+    out = tmp_path / "red.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        + _file(":fld", "/usr/bin/ld", "ld")
+        + _file(":fpre", "/opt/pre/libfoo.a", "libfoo.a")
+        + ":fplug a b:file .\n"
+        + ':fplug b:abspath "/home/u/proj/buildroot/plugin.so" .\n'
+        + ':fplug b:name "plugin.so" .\n'
+        + f':fplug b:hash "{h}" .\n'
+        + ":pld a b:process .\n:pld b:executable :fld .\n"
+        + ":pld b:reads :fpre .\n:pld b:writes :fplug .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()],
+                             payload=pv.collect_payload(root))
+    assert rep.verdict == "RED"
+    assert rep.payload.red == 1
+
+
+def test_git_blob_hash_matches_git(tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_bytes(b"hello\n")
+    # git hash-object of "hello\n"
+    assert pv.git_blob_hash(f) == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+def test_detect_hash_algo_from_graph(tmp_path):
+    """A trace made with -2/--sha256 must be hashed the same way here."""
+    sha256_out = tmp_path / "sha256.out"
+    sha256_out.write_text(
+        ":f0 a b:file .\n"
+        ':f0 b:abspath "/x" .\n'
+        f':f0 b:hash "{"a" * 64}" .\n'
+    )
+    assert pv.detect_hash_algo(parse_out(sha256_out).files) == "sha256"
+    assert pv.detect_hash_algo(parse_out(_payload_out(tmp_path, "b" * 40)).files) == "sha1"
+
+
 def test_no_package_backend_flags_system_libs(out_file):
     # Without OS-package attribution, the system libc.so.6 becomes a foreign
     # binary — demonstrates why enrichment is required for a clean verdict.
