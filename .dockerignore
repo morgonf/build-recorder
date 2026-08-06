@@ -12,14 +12,16 @@
 .vscode
 tags
 
-# Host build products (the reproducibility hazard above)
+# Host build products (the reproducibility hazard above).
+# Note: .dockerignore is not .gitignore -- a leading "*" does not cross "/",
+# so a bare "*.o" would match only the top level and let src/*.o through.
 build-recorder
-*.o
-*.a
-*.so
-*.so.*
-.dirstamp
-src/.deps/
+**/*.o
+**/*.a
+**/*.so
+**/*.so.*
+**/.dirstamp
+**/.deps
 src/schema.c
 
 # Autotools output regenerated inside the container
@@ -43,13 +45,13 @@ benchmark/Makefile
 benchmark/Makefile.in
 
 # Backups and editor droppings
-*~
-*.swp
+**/*~
+**/*.swp
 
 # Python: analysis layer is not part of the image
-__pycache__/
-*.pyc
-.pytest_cache/
+**/__pycache__
+**/*.pyc
+.pytest_cache
 
 # Research material, not needed to build the tracer
 doc/bibliography/
