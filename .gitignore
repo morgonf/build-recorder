@@ -7,8 +7,9 @@
 # Ctags
 tags
 
-# Indent
-*.*~
+# Backup files (indent, autotools, editors). "*.*~" alone misses extensionless
+# names such as "configure~".
+*~
 
 # Prerequisites
 *.d
@@ -52,7 +53,6 @@ autom4te.cache
 /compile
 /config.cache
 /config.guess
-/config.h.in
 /config.log
 /config.status
 /config.sub
@@ -61,7 +61,10 @@ autom4te.cache
 /depcomp
 /install-sh
 /missing
-/stamp-h1
+# Not anchored: AC_CONFIG_HEADERS([src/config.h]) puts these under src/, not at
+# the top level.
+config.h.in
+stamp-h1
 
 # automake
 Makefile.in
@@ -92,6 +95,10 @@ Makefile
 # Generated Config Header
 config.h
 
+# Schema blob generated from doc/build-recorder-schema.ttl by xxd (see
+# src/Makefile.am); shipped in the tarball via EXTRA_DIST, not versioned.
+src/schema.c
+
 # Generated Scripts
 build-aux/compile
 build-aux/depcomp
@@ -100,6 +107,9 @@ build-aux/missing
 
 # Bibliography PDFs (local copies, not versioned)
 doc/bibliography/pdf/
+
+# pytest
+.pytest_cache/
 
 # Python bytecode
 __pycache__/

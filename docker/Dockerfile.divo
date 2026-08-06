@@ -1,0 +1,11 @@
+# Overlay: build-recorder + Java/Maven/.NET toolchains for Diво components
+FROM build-recorder:latest
+
+RUN apt-get update -q && \
+    apt-get install -y -q \
+        java-17-openjdk-devel \
+        maven \
+        dotnet-sdk-8.0 && \
+    apt-get clean
+
+ENTRYPOINT ["/entrypoint.sh"]

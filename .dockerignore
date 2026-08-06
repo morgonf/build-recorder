@@ -1,0 +1,55 @@
+# docker/Dockerfile builds the tracer with "COPY . ." followed by
+# "autoreconf -i && ./configure && make -C src".  Anything build-shaped that
+# comes in from the host is a hazard: host object files and a host-built
+# binary are newer than the sources, so make skips recompiling and the image
+# ships a binary that was not built in the container.  Keep the build context
+# to sources only.
+
+# Version control and local tooling
+.git
+.github
+.claude
+.vscode
+tags
+
+# Host build products (the reproducibility hazard above)
+build-recorder
+*.o
+*.a
+*.so
+*.so.*
+.dirstamp
+src/.deps/
+src/schema.c
+
+# Autotools output regenerated inside the container
+configure
+config.status
+config.log
+config.cache
+aclocal.m4
+autom4te.cache/
+build-aux/
+Makefile
+Makefile.in
+src/Makefile
+src/Makefile.in
+src/config.h
+src/config.h.in
+src/stamp-h1
+examples/Makefile
+examples/Makefile.in
+benchmark/Makefile
+benchmark/Makefile.in
+
+# Backups and editor droppings
+*~
+*.swp
+
+# Python: analysis layer is not part of the image
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Research material, not needed to build the tracer
+doc/bibliography/
