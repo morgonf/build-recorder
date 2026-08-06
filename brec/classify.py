@@ -82,6 +82,12 @@ _SOURCE_EXTS: frozenset[str] = frozenset({
     ".c", ".cpp", ".cc", ".cxx", ".c++", ".s", ".S", ".asm",
 })
 
+# Suffixes of files that are build *outputs*.  Deliberately excludes ".d":
+# a make dependency file is bookkeeping about the build, not a product of it.
+_ARTIFACT_EXTS: frozenset[str] = frozenset({
+    ".so", ".a", ".la", ".dll", ".dylib", ".ko",
+})
+
 
 def _proc_role(exe_abspath: str) -> str:
     name = Path(exe_abspath).name
@@ -196,6 +202,48 @@ def process_role(exe_abspath: str) -> str:
     processes without importing the private helper directly.
     """
     return _proc_role(exe_abspath)
+
+
+def is_vendor_path(abspath: str) -> bool:
+    """True when *abspath* lies inside a vendor / third-party directory."""
+    return _is_vendor_path(abspath)
+
+
+def vendor_dir(abspath: str) -> Optional[str]:
+    """Return ``"<vendor_segment>/<component>"`` for *abspath*, else ``None``.
+
+    ``None`` means either that the path is not vendored at all, or that the
+    vendor segment is the final component and no component name follows it.
+    """
+    return _extract_vendor_dir(abspath)
+
+
+def is_build_artifact(abspath: str) -> bool:
+    """True when *abspath* is a meaningful build output.
+
+    The single definition behind the artifact lists of ``verify-build.py`` and
+    the artifact counts of ``provenance-verdict.py``.  Those two carried
+    separate copies that had drifted apart, so the same ``.out`` file could
+    yield two different artifact sets; two decisions settle that drift:
+
+    * **Toolchain probes are never artifacts.**  ``conftest``, ``cmTC_*``,
+      ``CMakeTmp`` and friends are extensionless executables, so without the
+      temp filter every ``./configure`` run contributed dozens of them.  In
+      ``provenance-verdict.py`` they landed in the denominator of *fidelity*,
+      diluting it with files nobody ships.
+    * **A ``.d`` file is not an artifact.**  ``verify-build.py`` used to list
+      make dependency files among the outputs; they describe the build rather
+      than result from it.  ``.ko``, previously known only to the verdict, is
+      an artifact everywhere now.
+    """
+    if _TEMP_RE.search(abspath):
+        return False
+    name = Path(abspath).name
+    if Path(name).suffix.lower() in _ARTIFACT_EXTS:
+        return True
+    if ".so." in name:                      # libfoo.so.2, libc.so.6
+        return True
+    return "." not in name and not name.startswith(".")   # bare executable
 
 
 def dep_type_from_path(abspath: str, has_package: bool) -> str:

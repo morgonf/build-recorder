@@ -34,17 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from brec.classify import is_vendor_path, vendor_dir
 from brec.model import parse_out as _brec_parse_out
-
-# ── Vendor directory patterns ─────────────────────────────────────────────────
-
-VENDOR_DIRS = {
-    "third_party", "thirdparty", "3rdparty",
-    "vendor", "vendors",
-    "external", "externals", "extern",
-    "deps", "dependencies",
-    "contrib", "bundled", "embedded",
-}
 
 # ── Known component database ──────────────────────────────────────────────────
 
@@ -242,23 +233,6 @@ def parse_file_records(out_file: Path) -> list[FileRecord]:
 
 # ── Layer 1: path-based component detection ───────────────────────────────────
 
-def _is_vendor_path(abspath: str) -> bool:
-    parts = abspath.lower().replace("\\", "/").split("/")
-    return any(p in VENDOR_DIRS for p in parts)
-
-
-def _extract_vendor_dir(abspath: str) -> str:
-    """Return the vendor subdirectory (e.g. 'third_party/lua-5.3.6')."""
-    parts = abspath.replace("\\", "/").split("/")
-    for i, p in enumerate(parts):
-        if p.lower() in VENDOR_DIRS:
-            # include one more level if it looks like a component dir
-            if i + 1 < len(parts):
-                return "/".join(parts[i:i+2])
-            return parts[i]
-    return ""
-
-
 def _match_component_by_file(filename: str) -> Optional[str]:
     for key, spec in KNOWN_COMPONENTS.items():
         if filename in spec.file_triggers:
@@ -277,14 +251,14 @@ def _version_from_dir(dirname: str) -> Optional[tuple[str, str]]:
 
 
 def detect_vendored_components(records: list[FileRecord]) -> list[VendoredComponent]:
-    vendor_files = [r for r in records if r.dep_type == "project_source" and _is_vendor_path(r.abspath)]
+    vendor_files = [r for r in records if r.dep_type == "project_source" and is_vendor_path(r.abspath)]
 
     # Group by (component_key, vendor_dir) — multiple versions of same lib may coexist
     bucket: dict[tuple[str, str], list[FileRecord]] = defaultdict(list)
     bucket_meta: dict[tuple[str, str], tuple[Optional[str], str, float]] = {}  # → (version, method, conf)
 
     for rec in vendor_files:
-        vdir = _extract_vendor_dir(rec.abspath)
+        vdir = vendor_dir(rec.abspath) or ""
         dirname = vdir.split("/")[-1]
         fname = Path(rec.abspath).name
 

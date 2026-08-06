@@ -20,6 +20,9 @@ from brec.classify import (
     VENDOR_DIRS,
     classify_files,
     classify_roles,
+    is_build_artifact,
+    is_vendor_path,
+    vendor_dir,
 )
 from brec.ir import (
     BuildGraph,
@@ -37,17 +40,17 @@ TINY_OUT = FIXTURES / "tiny.out"
 SAMPLE_OUT = FIXTURES / "classify_sample.out"
 RPM_DUMP = FIXTURES / "classify_rpm_dump.txt"
 
-# Load verify-build.py (hyphenated name)
-_VB_PATH = Path(__file__).parent.parent / "verify-build.py"
-_spec = importlib.util.spec_from_file_location("verify_build", _VB_PATH)
-_vb = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_vb)
+def _load_script(filename: str):
+    """Import a top-level CLI script whose name is not a valid module name."""
+    path = Path(__file__).parent.parent / filename
+    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-# Load enrich.py
-_ENRICH_PATH = Path(__file__).parent.parent / "enrich.py"
-_espec = importlib.util.spec_from_file_location("enrich", _ENRICH_PATH)
-_enrich = importlib.util.module_from_spec(_espec)
-_espec.loader.exec_module(_enrich)
+
+_vb = _load_script("verify-build.py")
+_enrich = _load_script("enrich.py")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -583,3 +586,83 @@ def test_classify_files_idempotent_roles() -> None:
     r2 = classify_files(graph, [])
     assert {cf.file.abspath: cf.dep_class for cf in r1} == \
            {cf.file.abspath: cf.dep_class for cf in r2}
+
+
+# ── is_build_artifact: one definition for verify-build and provenance-verdict ─
+#
+# These two carried separate copies that had drifted, so the same .out could
+# yield two different artifact sets. The cases below pin the merged semantics.
+
+@pytest.mark.parametrize("path", [
+    "/home/user/build/libfoo.so",
+    "/home/user/build/libfoo.so.2",
+    "/home/user/build/libfoo.a",
+    "/home/user/build/libfoo.la",
+    "/home/user/build/foo.dll",
+    "/home/user/build/foo.dylib",
+    "/home/user/build/mymod.ko",          # was known only to provenance-verdict
+    "/home/user/build/myapp",             # bare executable
+])
+def test_is_build_artifact_true(path: str) -> None:
+    assert is_build_artifact(path) is True
+
+
+@pytest.mark.parametrize("path", [
+    "/home/user/build/hello.o",           # object file, not a final output
+    "/home/user/build/hello.c",
+    "/home/user/build/.hidden",
+    "/home/user/build/hello.d",           # make bookkeeping, not a product
+])
+def test_is_build_artifact_false(path: str) -> None:
+    assert is_build_artifact(path) is False
+
+
+@pytest.mark.parametrize("path", [
+    "/home/user/build/conftest",          # autotools probe: extensionless!
+    "/home/user/build/conftest.o",
+    "/home/user/build/cmTC_deadbe",
+    "/home/user/build/CMakeFiles/myapp.dir/main.o",
+    "/tmp/ccABCDEFG.o",
+    "/home/user/build/TryCompile-xyz/a.out",
+])
+def test_is_build_artifact_excludes_toolchain_probes(path: str) -> None:
+    """Probes are not artifacts anywhere.
+
+    provenance-verdict.py lacked this filter, so every ./configure run put
+    dozens of conftest executables into the denominator of its fidelity score.
+    """
+    assert is_build_artifact(path) is False
+
+
+def test_is_build_artifact_is_the_only_definition() -> None:
+    """verify-build.py and provenance-verdict.py must share one implementation."""
+    vb = _load_script("verify-build.py")
+    pv = _load_script("provenance-verdict.py")
+    assert vb.is_build_artifact is is_build_artifact
+    assert pv.is_build_artifact is is_build_artifact
+    assert not hasattr(vb, "_is_real_artifact")
+    assert not hasattr(pv, "is_real_artifact")
+
+
+# ── is_vendor_path / vendor_dir ───────────────────────────────────────────────
+
+def test_is_vendor_path_detects_segment() -> None:
+    assert is_vendor_path("/src/third_party/sqlite/sqlite3.c") is True
+    assert is_vendor_path("/src/Third_Party/sqlite/sqlite3.c") is True   # case
+    assert is_vendor_path("/src/core/main.c") is False
+
+
+def test_vendor_dir_returns_segment_and_component() -> None:
+    assert vendor_dir("/src/third_party/sqlite/sqlite3.c") == "third_party/sqlite"
+    assert vendor_dir("/src/core/main.c") is None
+
+
+def test_vendor_helpers_are_shared() -> None:
+    """sbom.py and verify-build.py must not re-derive vendor detection."""
+    sb = _load_script("sbom.py")
+    vb = _load_script("verify-build.py")
+    assert sb.is_vendor_path is is_vendor_path
+    assert sb.vendor_dir is vendor_dir
+    assert vb.is_vendor_path is is_vendor_path
+    assert not hasattr(sb, "VENDOR_DIRS")
+    assert not hasattr(vb, "_is_vendor_path")

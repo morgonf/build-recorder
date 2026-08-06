@@ -18,7 +18,6 @@ Usage:
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -29,6 +28,7 @@ from typing import Optional
 
 import brec.ir as _brec_ir
 from brec.classify import classify_roles as _brec_classify_roles
+from brec.classify import is_build_artifact, is_vendor_path
 from brec.model import parse_out as _brec_parse_out
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ class FileNode:
 
     @property
     def is_vendored(self) -> bool:
-        return self.is_project_source and _is_vendor_path(self.abspath)
+        return self.is_project_source and is_vendor_path(self.abspath)
 
     @property
     def provenance(self) -> str:
@@ -93,39 +93,6 @@ class ProcessNode:
     reads:   list[str] = field(default_factory=list)   # file URIs
     writes:  list[str] = field(default_factory=list)   # file URIs
     renames: list[str] = field(default_factory=list)   # file URIs (new name after rename)
-
-
-_TEMP_PATTERNS = re.compile(
-    r'/(cc[0-9A-Za-z]{6,}\.(res|lto_wrapper_args|s|o)|'
-    r'cmTC_[0-9a-f]+|'
-    r'conftest|confcache|confdefs\.h|config\.log|'
-    r'CMakeFiles/|TryCompile|CMakeTmp)'
-)
-
-def _is_real_artifact(abspath: str) -> bool:
-    """True if path looks like a meaningful build output, not a temp file."""
-    if _TEMP_PATTERNS.search(abspath):
-        return False
-    name = Path(abspath).name
-    # Keep: .so, .a, executables (no ext), .d dependency files, .la
-    sfx = Path(name).suffix.lower()
-    if sfx in (".so", ".a", ".la", ".d", ".dll", ".dylib"):
-        return True
-    if ".so." in name:
-        return True
-    # Executable: no extension, not a hidden file
-    if "." not in name and not name.startswith("."):
-        return True
-    return False
-
-
-def _is_vendor_path(abspath: str) -> bool:
-    VENDOR = {
-        "third_party", "thirdparty", "3rdparty",
-        "vendor", "vendors", "external", "externals", "extern",
-        "deps", "dependencies", "contrib", "bundled", "embedded",
-    }
-    return any(p in VENDOR for p in abspath.lower().replace("\\", "/").split("/"))
 
 
 def _to_build_graph_for_roles(
@@ -247,7 +214,7 @@ def analyze(files: dict[str, FileNode],
             for furi in proc.writes:
                 if furi not in seen_artifact and furi in files:
                     f = files[furi]
-                    if _is_real_artifact(f.abspath):
+                    if is_build_artifact(f.abspath):
                         seen_artifact.add(furi)
                         deps.artifacts.append(f)
 
@@ -255,7 +222,7 @@ def analyze(files: dict[str, FileNode],
             for furi in proc.writes + proc.renames:
                 if furi not in seen_artifact and furi in files:
                     f = files[furi]
-                    if f.role == "static_archive" and _is_real_artifact(f.abspath):
+                    if f.role == "static_archive" and is_build_artifact(f.abspath):
                         seen_artifact.add(furi)
                         deps.artifacts.append(f)
 
@@ -263,7 +230,7 @@ def analyze(files: dict[str, FileNode],
         for furi in proc.renames:
             if furi not in seen_artifact and furi in files:
                 f = files[furi]
-                if _is_real_artifact(f.abspath) and furi not in written_uris - set(proc.renames):
+                if is_build_artifact(f.abspath) and furi not in written_uris - set(proc.renames):
                     seen_artifact.add(furi)
                     deps.artifacts.append(f)
 

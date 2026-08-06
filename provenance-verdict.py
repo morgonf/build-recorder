@@ -57,6 +57,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from brec.classify import is_build_artifact
 from brec.ir import BuildGraph, FileNode
 from brec.model import parse_out
 from brec.provenance.base import ProvenanceBackend
@@ -88,19 +89,6 @@ def is_binary(abspath: str) -> bool:
     if ".so." in name:
         return True
     return Path(name).suffix in _BIN_EXTS
-
-
-def is_real_artifact(abspath: str) -> bool:
-    """A meaningful build output (library or executable), not a temp/aux file."""
-    name = Path(abspath).name
-    sfx = Path(name).suffix.lower()
-    if sfx in (".so", ".a", ".la", ".dll", ".dylib", ".ko"):
-        return True
-    if ".so." in name:
-        return True
-    if "." not in name and not name.startswith("."):   # bare executable
-        return True
-    return False
 
 
 # ── Copy-edge parsing (supplements brec.model) ────────────────────────────────
@@ -380,7 +368,7 @@ def compute_verdict(
         fn = files.get(furi)
         if fn is None:
             continue
-        real_art = is_real_artifact(fn.abspath)
+        real_art = is_build_artifact(fn.abspath)
         if real_art:
             real += 1
         ls = leaves(furi, frozenset())
@@ -547,7 +535,7 @@ def check_payload(
 
 
 def _real_bad(findings: list[Finding], files: dict[str, FileNode]) -> int:
-    return sum(1 for f in findings if is_real_artifact(f.artifact))
+    return sum(1 for f in findings if is_build_artifact(f.artifact))
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
