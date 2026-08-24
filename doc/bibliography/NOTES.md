@@ -76,6 +76,16 @@
 - `Uncovering Hidden Inclusions of Vulnerable Dependencies in Real-World Java Projects`
   (arXiv 2601.23020): сильно пересекается с `dietrich2024-blindspots` и `rasheed2026-hiddendeps`.
 
+**Проход 1–2 по `kong2025-ectsbom` (24.08.2026, PDF в `pdf/`).** Что вынесено в аннотацию:
+их ground truth это консенсус пяти инструментов, включая их собственный (авторы признают риск общей
+системной ошибки), проверка использования статическая, поэтому recall 99,8 % измерен относительно
+согласия инструментов, а не относительно факта сборки. Три эвристических фильтра плюс список из семи
+категорий конфигурационных файлов плюс частный случай `Class.forName()` это и есть цена угадывания
+факта использования там, где трассировка его наблюдает. Отдельно к цитированию: объясняя точность
+Build-Info-Go, авторы пишут, что тот «uses building logs to extract dependency, which contains more
+precise information than static properties». Кандидаты на добор из их ссылок: Xiao et al., JBomAudit
+(NDSS 2025, doi:10.14722/ndss.2025.240322); Pereira et al. (SBOM по бинарям, zero-shot).
+
 **Проверено:** ключи papers.bib и ANNOTATIONS.md совпадают (70/70); скобки в .bib сбалансированы.
 
 ## 2026-07-28 (сессия 5): `darkmatter2026-uncharted` подготовлена к чтению
