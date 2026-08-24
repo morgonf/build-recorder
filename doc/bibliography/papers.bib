@@ -249,6 +249,29 @@
   note          = {Сканирует ссылки типов в .class (owners вызовов/полей, new, cast, class-литералы) -> маппинг внутренних JVM-имён в компоненты SBOM; hidden deps + варианты компонентов}
 }
 
+@inproceedings{dietrich2024-blindspots,
+  author    = {Dietrich, Jens and Rasheed, Shawn and Jordan, Alexander and White, Tim},
+  title     = {On the Security Blind Spots of Software Composition Analysis},
+  booktitle = {Proc. 2024 Workshop on Software Supply Chain Offensive Research and Ecosystem Defenses (SCORED '24)},
+  year      = {2024},
+  pages     = {77--87},
+  doi       = {10.1145/3689944.3696165},
+  url       = {https://arxiv.org/abs/2306.05534},
+  note      = {В Crossref год записан как 2023 (ошибка метаданных ACM), фактически workshop SCORED '24 при CCS '24. Из 29 CVE получено >53 тыс. кандидатов-клонов в Maven Central, подтверждено 727 (86 в агрегации по версиям); по результатам обновлены шесть CVE в GitHub Advisory Database}
+}
+
+@article{kong2025-ectsbom,
+  author  = {Kong, Xianglong and Zhuo, Hangyi and Miao, Xinyuan and Huang, Wei and Du, Jiayu},
+  title   = {SBOM generation based on code-level external component trees},
+  journal = {Scientific Reports},
+  volume  = {15},
+  pages   = {45277},
+  year    = {2025},
+  doi     = {10.1038/s41598-025-29762-0},
+  url     = {https://www.nature.com/articles/s41598-025-29762-0},
+  note    = {SBOM из исходного кода (объявления импортов), а не из pom.xml: структура external component tree, три фильтра (нативные для языка, внутрипроектные, неиспользуемые) и обрезка поддеревьев. 30 проектов на Java/Python/Scala, recall 99,8 %, раздутые зависимости устранены}
+}
+
 % ============================================================
 % Идентификация компонентов: binary-level (unbuilt binaries)
 % ============================================================
@@ -327,6 +350,16 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2504.19551},
   note          = {Детект TPL в бинаре без исходников TPL: BCSD-признаки + трёхступенчатая «очистка» репозитория (core functions, function-level); сравнение с ModX, B2SFinder, LibAM, BinaryAI на датасете ArchLinux}
+}
+
+@misc{guo2026-bcsdempirical,
+  author        = {Guo, Jingdong and Dong, Chaopeng and Ren, Yimo and Li, Siyuan and Liu, Jie and Li, Hong and Zhu, Hongsong},
+  title         = {Understanding Binary Code Similarity for Real-World Vulnerability Detection: A Large-Scale Empirical Study},
+  year          = {2026},
+  eprint        = {2606.28870},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2606.28870},
+  note          = {Препринт от 27.06.2026, 21 стр. 60 тыс. прошивок от 200 вендоров. Четыре фактора качества BCSD: версия уязвимой функции, область поиска, размер функции, тулчейн компиляции. Build-aware запрос поднимает MRR с 0,818 до 0,981; двухэтапный TPL-aware поиск даёт +18,5 %}
 }
 
 % ============================================================
@@ -479,6 +512,49 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2505.02521},
   note          = {TODO: уточнить авторов}
+}
+
+@inproceedings{muto2026-attestablechain,
+  author    = {Muto, Kenichiro and Suzaki, Kuniyasu},
+  title     = {Attestable Build Chain: Enabling Trust in Reproducible Builds},
+  booktitle = {Proc. 56th Annual IEEE/IFIP International Conference on Dependable Systems and Networks Workshops (DSN-W)},
+  year      = {2026},
+  pages     = {196--203},
+  doi       = {10.1109/DSN-W70714.2026.00051},
+  url       = {https://lab.iisec.ac.jp/~suzaki_lab/PDF/DSN-HAP26_muto.pdf},
+  note      = {Institute of Information Security, Йокогама; workshop HAP при DSN 2026. Фактические файловые обращения сборки измеряются ядерным Linux IMA, лог привязан к vTPM и аттестации AMD SEV-SNP внутри CVM; итог -- Build Chain Report, проверяемый без пересборки. Сборки Bazel: замедление 2--5,4 раза (7,83 -> 39,98 с; 165,32 -> 891,87 с)}
+}
+
+@misc{asad2026-kettle,
+  author        = {Asad, Amean and Arko, Andr\'{e}},
+  title         = {Kettle: Attested builds for verifiable software provenance},
+  year          = {2026},
+  eprint        = {2605.08363},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2605.08363},
+  note          = {Препринт от 08.05.2026, 26 стр. Сборка внутри measured confidential VM; SHA-256 документа провенанса помещается в report_data аппаратного отчёта аттестации, так что подписью провенанса служит сам отчёт TEE. Код: github.com/lunal-dev/kettle}
+}
+
+@misc{solarin2026-verifiability,
+  author        = {Solarin, Oreofe and Kalu, Kelechi and Davis, James C. and Amusuo, Paschal},
+  title         = {Reproducibility is Not Enough: Artifact Verifiability in Decentralized-Build Package Ecosystems},
+  year          = {2026},
+  eprint        = {2608.18180},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2608.18180},
+  note          = {Препринт от 18.08.2026, 12 стр. Четыре экосистемы с децентрализованной сборкой; Artifact Verification Pipeline воспроизводит роль независимого верификатора, опираясь только на выводимые из реестра метаданные. Причины провала верификации: отсутствующие метаданные источника и сборки, неявные преобразования при релизе, нестандартные практики сборки}
+}
+
+@inproceedings{nanni2026-fdroid,
+  author        = {Nanni, Denise and Malka, Julien and Zacchiroli, Stefano and Zimmermann, Th\'{e}o and d'Angelo, Gabriele},
+  title         = {Understanding Build Reproducibility in the F-Droid Ecosystem},
+  booktitle     = {Proc. ACM Conference on Reproducibility and Replicability (ACM REP '26)},
+  address       = {Delft, Netherlands},
+  year          = {2026},
+  eprint        = {2607.01890},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2607.01890},
+  note          = {18 904 версии приложений, ранее подтверждённых F-Droid как побитово воспроизводимые (09.2018--02.2026): пересобрать удалось 83 %, из них 94 % снова совпали побитово; 76 % провалов пересборки -- недоступные зависимости. Деградирует не воспроизводимость, а сама возможность пересборки}
 }
 
 @misc{ron2026-zkcompile,
