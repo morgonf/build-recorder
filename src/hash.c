@@ -91,6 +91,55 @@ git_blob_digest(const unsigned char *buf, size_t sz)
     return hash_to_str(digest, dlen);
 }
 
+/* Hash a file that cannot be mapped, by reading it.
+ *
+ * The size reported by stat(2) is a promise only for regular files; for the
+ * synthetic ones it is a page-sized placeholder. So the digest covers the bytes
+ * actually read, and the git-blob header states that same length, which is what
+ * makes the result comparable with a hash of the same content taken anywhere
+ * else. Returns NULL if reading fails outright.
+ */
+static char *
+hash_by_reading(int fd, size_t hint)
+{
+    size_t cap = hint > 0 ? hint : 4096;
+    size_t len = 0;
+    char *buf = malloc(cap);
+
+    if (buf == NULL)
+	return NULL;
+
+    for (;;) {
+	if (len == cap) {
+	    size_t ncap = cap * 2;
+	    char *nbuf = realloc(buf, ncap);
+
+	    if (nbuf == NULL) {
+		free(buf);
+		return NULL;
+	    }
+	    buf = nbuf;
+	    cap = ncap;
+	}
+	ssize_t n = read(fd, buf + len, cap - len);
+
+	if (n < 0) {
+	    if (errno == EINTR)
+		continue;
+	    free(buf);
+	    return NULL;
+	}
+	if (n == 0)
+	    break;
+	len += (size_t) n;
+    }
+
+    char *ret = git_blob_digest((const unsigned char *) buf, len);
+
+    free(buf);
+    return ret;
+}
+
 static char *
 hash_file_contents(char *name, size_t sz)
 {
@@ -103,9 +152,16 @@ hash_file_contents(char *name, size_t sz)
     char *buf = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
 
     if (buf == MAP_FAILED) {
-	error(0, errno, "mmaping `%s'", name);
+	// Not everything readable is mappable: sysfs and procfs entries report
+	// a size but have no pages behind it. They are ordinary build inputs
+	// all the same (the Go runtime reads /sys/.../hpage_pmd_size on every
+	// start), so read them instead of dropping them and their hash.
+	char *ret = hash_by_reading(fd, sz);
+
+	if (ret == NULL)
+	    error(0, errno, "hashing `%s'", name);
 	close(fd);
-	return NULL;
+	return ret;
     }
     if (madvise(buf, sz, MADV_SEQUENTIAL))
 	error(0, errno, "madvise `%s'", name);

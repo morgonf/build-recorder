@@ -3,7 +3,7 @@
 /* record.c */
 void record_start(char *fname);
 void record_stop(void);
-void record_process_start(pid_t pid, char *poutname);
+void record_process_start(pid_t pid, char *poutname, int declare_type);
 void record_process_end(char *poutname);
 void record_process_env(char *poutname, char **envp);
 void record_rename(char *poutname, char *from_foutname, char *to_foutname);

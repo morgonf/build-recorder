@@ -48,6 +48,7 @@ typedef struct {
     uint64_t args[6];
     void *entry_info;
     char ignore_one_sigstop;
+    char declared;		       // `a b:process' already written out
     unsigned int coverage_gaps;
 } PROCESS_INFO;
 

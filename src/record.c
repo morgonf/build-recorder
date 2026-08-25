@@ -144,16 +144,30 @@ get_cmdline(pid_t pid)
     return ret;
 }
 
+/* Write out a process and what it is running.
+ *
+ * `declare_type' distinguishes the first appearance of a process in the graph
+ * from a later exec by the same process: the type triple belongs to the
+ * subject once, the command line to every exec. A process that only ever forks
+ * still gets declared, because it reads and writes files like any other, and a
+ * subject carrying edges but no type is invisible to consumers that key on the
+ * type.
+ */
 void
-record_process_start(pid_t pid, char *poutname)
+record_process_start(pid_t pid, char *poutname, int declare_type)
 {
     char tbuf[32];
     char *cmd_line = get_cmdline(pid);
 
     timestamp_now(tbuf, 32);
 
-    record_triple(poutname, "a", "b:process", false);
-    record_triple(poutname, "b:cmd", cmd_line, true);
+    if (declare_type)
+	record_triple(poutname, "a", "b:process", false);
+    // A process caught in the moment between clone(2) and exec has an empty
+    // /proc/<pid>/cmdline, so there is no command to state yet: declare the
+    // process without one rather than write a null.
+    if (cmd_line != NULL)
+	record_triple(poutname, "b:cmd", cmd_line, true);
     record_triple(poutname, "b:start", tbuf, true);
 
     free(cmd_line);

@@ -81,19 +81,39 @@ def parse_out(path: Path) -> BuildGraph:
 
     # ── Inner helpers ─────────────────────────────────────────────────────────
 
+    def _as_process(uri: str) -> None:
+        """Accept a subject as a process on the strength of its predicates.
+
+        Traces written before the tracer declared forked children only typed a
+        process when it exec\'d, so workers that merely fork (make, cargo, and
+        every thread) carried reads and writes under an untyped subject.  Keying
+        strictly on the type declaration dropped those edges without a word: on
+        a cargo build, a third of all processes.  Predicates that only a process
+        can carry are declaration enough.
+        """
+        if uri not in proc_uris and uri not in file_uris:
+            proc_uris.add(uri)
+            raw.setdefault(uri, {})
+
     def _set_str(uri: str, prop: str, val: str) -> None:
         if uri in file_uris and prop in _FILE_STR:
             raw.setdefault(uri, {})[prop] = val
-        elif uri in proc_uris and prop in _PROC_STR:
+            return
+        if prop in _PROC_STR:
+            _as_process(uri)
+        if uri in proc_uris and prop in _PROC_STR:
             raw.setdefault(uri, {})[prop] = val
 
     def _set_int(uri: str, prop: str, val: str) -> None:
         if uri in file_uris and prop == "size":
             raw.setdefault(uri, {})["size"] = int(val)
-        elif uri in proc_uris and prop == "pid":
-            raw.setdefault(uri, {})["pid"] = int(val)
+        elif prop == "pid":
+            _as_process(uri)
+            if uri in proc_uris:
+                raw.setdefault(uri, {})["pid"] = int(val)
 
     def _set_uri_rel(subj: str, pred: str, obj: str) -> None:
+        _as_process(subj)
         if subj not in proc_uris:
             return
         d = raw.setdefault(subj, {})

@@ -348,3 +348,30 @@ def test_empty_file_gives_empty_graph(tmp_path: Path) -> None:
     graph = parse_out(out)
     assert graph.files == {}
     assert graph.procs == {}
+
+
+def test_undeclared_process_subject_is_still_a_process(tmp_path):
+    """Edges must survive a subject the tracer never typed.
+
+    Traces produced before the tracer declared forked children carry reads and
+    writes under subjects with no `a b:process` line; keying strictly on the
+    declaration dropped a third of the processes on a cargo build, silently.
+    """
+    out = tmp_path / "undeclared.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        ":f0 a b:file .\n"
+        ':f0 b:abspath "/usr/include/stdio.h" .\n'
+        ':f0 b:name "stdio.h" .\n'
+        ":f0 b:size 1 .\n"
+        ':f0 b:hash "aa00000000000000000000000000000000000001" .\n'
+        ":p9 b:reads :f0 .\n"           # subject never declared
+        ":p9 b:pid 4242 .\n",
+        encoding="utf-8",
+    )
+    graph = parse_out(out)
+    assert ":p9" in graph.procs
+    assert graph.procs[":p9"].reads == [":f0"]
+    assert graph.procs[":p9"].pid == 4242
+    assert ":p9" not in graph.files

@@ -106,6 +106,7 @@ pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
     self->finfo = malloc(self->finfo_size * sizeof (FILE_INFO));
     self->fds = malloc(self->finfo_size * sizeof (int));
     self->ignore_one_sigstop = ignore_one_sigstop;
+    self->declared = 0;
     self->coverage_gaps = 0;
 }
 
@@ -313,7 +314,8 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 static void
 handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 {
-    record_process_start(pid, pi->outname);
+    record_process_start(pid, pi->outname, !pi->declared);
+    pi->declared = 1;
 
     char *abspath = absolutepath(pid, dirfd, path);
 
@@ -448,6 +450,16 @@ handle_create_process(PROCESS_INFO *pi, pid_t child)
     if (!child_pi) {
 	child_pi = next_pinfo(child);
 	pinfo_new(child_pi, 1);
+    }
+
+    // Declare the child here rather than waiting for it to exec. Forked workers
+    // that never exec (make and cargo use them, and every thread arrives this
+    // way) used to accumulate reads and writes under a subject that was never
+    // typed, so every consumer keying on `a b:process' dropped their edges
+    // silently: on a cargo build that was a third of all processes.
+    if (!child_pi->declared) {
+	record_process_start(child, child_pi->outname, 1);
+	child_pi->declared = 1;
     }
 
     record_process_create(pi->outname, child_pi->outname);
@@ -783,6 +795,15 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		    if (ptrace
 			(PTRACE_GET_SYSCALL_INFO, pid, (void *) sizeof (info),
 			 &info) < 0) {
+			if (errno == ESRCH) {
+			    // The tracee died between the wait() that reported
+			    // this stop and this query. Runtimes that park and
+			    // kill worker threads hit this routinely (the Go
+			    // build does), and it used to abort the whole
+			    // trace. There is nothing left to read and nothing
+			    // to restart; its exit is reported by a later wait.
+			    continue;
+			}
 			error(EXIT_FAILURE, errno,
 			      "tracee PTRACE_GET_SYSCALL_INFO failed");
 		    }
@@ -819,6 +840,12 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 			PROCESS_INFO *pi = next_pinfo(pid);
 
 			pinfo_new(pi, 0);
+			// A tracee we meet only at its first stop, without
+			// having seen the clone that made it. Declare it here
+			// for the same reason as at fork: otherwise its edges
+			// hang off a subject with no type.
+			record_process_start(pid, pi->outname, 1);
+			pi->declared = 1;
 		    }
 		    break;
 		case SIGTRAP:
@@ -829,8 +856,15 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		    restart_sig = WSTOPSIG(status);
 	    }
 
-	    // Restarting process 
+	    // Restarting process
 	    if (ptrace(PTRACE_SYSCALL, pid, NULL, restart_sig) < 0) {
+		if (errno == ESRCH) {
+		    // Same race as on PTRACE_GET_SYSCALL_INFO above: the tracee
+		    // is already gone by the time we hand it back the CPU.
+		    // There is nothing to restart, and its exit still arrives
+		    // through wait(), so carry on rather than abort the trace.
+		    continue;
+		}
 		error(EXIT_FAILURE, errno, "failed restarting process");
 	    }
 	} else if (WIFEXITED(status)) {	// child process exited
