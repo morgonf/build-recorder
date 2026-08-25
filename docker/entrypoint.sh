@@ -148,6 +148,30 @@ build_from_srpm() {
     echo "Output: $output_file"
 }
 
+# ── Экспорт объявленных зависимостей сборки ──────────────────────────────────
+# Обе стороны сравнения «объявлено против прочитано» имеют смысл только внутри
+# сборочного окружения: имена возможностей резолвятся его же rpm-базой.
+# Потребитель — buildreq-audit.py.
+
+export_build_deps() {
+    local srpm="$1"
+    local declared="${OUTPUT_DIR}/builddeps-declared.txt"
+    local rpm_deps="${OUTPUT_DIR}/rpm-deps.txt"
+
+    echo "=== Exporting declared build dependencies ==="
+    rpm -qp --requires "$srpm" 2>/dev/null | sort -u > "$declared"
+
+    {
+        rpm -qa --qf '[P\t%{PROVIDENAME}\t%{NAME}\n]'
+        rpm -qa --qf '[R\t%{NAME}\t%{REQUIRENAME}\n]'
+    } 2>/dev/null > "$rpm_deps"
+
+    echo "    Declared : $(wc -l < "$declared") capabilities"
+    echo "    Dep graph: $(wc -l < "$rpm_deps") lines"
+    echo "    Files    : $declared, $rpm_deps"
+    echo ""
+}
+
 # ── Экспорт бинарей для CVE-анализа ──────────────────────────────────────────
 
 export_binaries() {
@@ -194,6 +218,7 @@ case "$MODE" in
         ;;
     srpm)
         build_from_srpm
+        export_build_deps "$SRPM"
         export_binaries /root/RPM/BUILD
         ;;
 esac

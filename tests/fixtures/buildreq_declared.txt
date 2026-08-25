@@ -1,0 +1,6 @@
+# declared build dependencies, as printed by: rpm -qp --requires pkg.src.rpm
+mytool >= 2.0
+libfoo-devel
+libbar-devel
+/bin/sh
+rpmlib(PayloadIsLzma) <= 4.0-1

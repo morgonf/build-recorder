@@ -1,0 +1,9 @@
+P	mytool	mytool
+P	libfoo-devel	libfoo-devel
+P	libfoo	libfoo
+P	libbaz-devel	libbaz-devel
+P	libbaz	libbaz
+P	bash	bash
+R	mytool	libbaz-devel
+R	libfoo-devel	libfoo
+R	libbaz-devel	libbaz

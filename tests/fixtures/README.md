@@ -49,3 +49,26 @@ The `execs` list in each `ProcessNode` aggregates both `b:creates` and
 | `tiny_escaped.out` | T0.2 | Paths with spaces, quotes, unicode in abspath |
 | `tiny_enriched_old.out` | T0.4 | Old `b:rpm_*` + `b:dep_type` predicates |
 | `tiny_enriched_new.out` | T0.4 | New `b:pkg_*` predicates |
+
+---
+
+## buildreq_sample.out, buildreq_declared.txt, buildreq_rpm_deps.txt
+
+**Status:** Synthetic (hand-crafted), added 2026-08-25 for `tests/test_buildreq.py`.
+
+Three inputs of the BuildRequires audit, kept deliberately small so every
+bucket of the report has exactly one member:
+
+- `buildreq_sample.out` — a one-process build that execs `mytool`, reads
+  `/usr/include/foo.h` (declared), `/usr/lib64/libbaz.a` (undeclared but
+  transitively implied), a project source with no package, and reads a file it
+  wrote itself (`/usr/libexec/helper`, must not count as an input).
+  Paths resolve against `rpm_dump_mini.txt`.
+- `buildreq_declared.txt` — declared capabilities in the format printed by
+  `rpm -qp --requires`: a version constraint, a file capability (`/bin/sh`),
+  a capability nothing installed provides (`libbar-devel`), a comment and an
+  `rpmlib(...)` pseudo-capability that must be dropped.
+- `buildreq_rpm_deps.txt` — provides/requires graph in the typed TSV form the
+  docker entrypoint writes: `P<TAB>capability<TAB>package` and
+  `R<TAB>package<TAB>capability`. `mytool` requires `libbaz-devel`, which is
+  what makes that package transitive rather than undeclared.

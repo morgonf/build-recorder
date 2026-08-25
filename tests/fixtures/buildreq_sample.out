@@ -1,0 +1,67 @@
+@prefix : <http://build-recorder.org/data#> .
+@prefix b: <http://build-recorder.org/rdf#> .
+
+# Synthetic trace for tests/test_buildreq.py — a one-file build that reads:
+#   a compiler (mytool)          — declared
+#   a header from libfoo-devel   — declared
+#   a header from libbaz-devel   — NOT declared, reachable only via closure
+#   a project source             — no package
+#   a header it generated itself — packaged path, but written here: not an input
+
+:p0 a b:process .
+:p0 b:pid 2001 .
+:p0 b:cmd "make" .
+:p0 b:start "2026-08-25T10:00:00" .
+:p0 b:end "2026-08-25T10:00:09" .
+
+:p1 a b:process .
+:p1 b:pid 2002 .
+:p1 b:cmd "mytool -c main.c -o main.o" .
+:p1 b:start "2026-08-25T10:00:01" .
+:p1 b:end "2026-08-25T10:00:08" .
+
+:f0 a b:file .
+:f0 b:abspath "/usr/bin/mytool" .
+:f0 b:name "mytool" .
+:f0 b:size 100000 .
+:f0 b:hash "bbbbcc0000000000000000000000000000000000" .
+
+:f1 a b:file .
+:f1 b:abspath "/usr/include/foo.h" .
+:f1 b:name "foo.h" .
+:f1 b:size 2048 .
+:f1 b:hash "bbbbcc0000000000000000000000000000000001" .
+
+:f2 a b:file .
+:f2 b:abspath "/usr/lib64/libbaz.a" .
+:f2 b:name "libbaz.a" .
+:f2 b:size 40960 .
+:f2 b:hash "bbbbcc0000000000000000000000000000000002" .
+
+:f3 a b:file .
+:f3 b:abspath "/build/src/main.c" .
+:f3 b:name "main.c" .
+:f3 b:size 512 .
+:f3 b:hash "bbbbcc0000000000000000000000000000000003" .
+
+:f4 a b:file .
+:f4 b:abspath "/build/src/main.o" .
+:f4 b:name "main.o" .
+:f4 b:size 1024 .
+:f4 b:hash "bbbbcc0000000000000000000000000000000004" .
+
+:f5 a b:file .
+:f5 b:abspath "/usr/libexec/helper" .
+:f5 b:name "helper" .
+:f5 b:size 700 .
+:f5 b:hash "bbbbcc0000000000000000000000000000000005" .
+
+:p0 b:creates :p1 .
+
+:p1 b:executable :f0 .
+:p1 b:reads :f1 .
+:p1 b:reads :f2 .
+:p1 b:reads :f3 .
+:p1 b:reads :f5 .
+:p1 b:writes :f4 .
+:p1 b:writes :f5 .
