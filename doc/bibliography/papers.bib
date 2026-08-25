@@ -28,12 +28,13 @@
 }
 
 @misc{bomfather2025-ebpf,
+  author        = {Srinivasan, Naveen and Naveen, Nathan and Naveen, Neil},
   title         = {Bomfather: An eBPF-based Kernel-level Monitoring Framework for Accurate Identification of Unknown, Unused, and Dynamically Loaded Dependencies in Modern Software Supply Chains},
   year          = {2025},
   eprint        = {2503.02097},
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2503.02097},
-  note          = {Сайт проекта: https://bomfather.dev/. TODO: уточнить авторов}
+  note          = {Сайт проекта: https://bomfather.dev/}
 }
 
 @misc{sbomobserver-buildobserver,
@@ -58,13 +59,13 @@
 % ============================================================
 
 @inproceedings{scored2023-sbom-ebpf-ima,
+  author    = {Crawford, Alex and Yakubovich, Eugene and Szumski, Rob},
   title     = {Enforcing SBOMs through the Linux kernel with eBPF and IMA},
   booktitle = {Proceedings of the 2023 Workshop on Software Supply Chain Offensive Research and Ecosystem Defenses (SCORED)},
   publisher = {ACM},
   year      = {2023},
   doi       = {10.1145/3605770.3625206},
-  url       = {https://dl.acm.org/doi/10.1145/3605770.3625206},
-  note      = {TODO: уточнить авторов}
+  url       = {https://dl.acm.org/doi/10.1145/3605770.3625206}
 }
 
 @misc{osv-determineversion,
@@ -99,12 +100,13 @@
 % ============================================================
 
 @misc{pinning2025-futile,
+  author        = {He, Hao and Vasilescu, Bogdan and K{\"a}stner, Christian},
   title         = {Pinning Is Futile: You Need More Than Local Dependency Versioning to Defend against Supply Chain Attacks},
   year          = {2025},
   eprint        = {2502.06662},
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/pdf/2502.06662},
-  note          = {TODO: уточнить авторов}
+  note          = {Опубликовано: Proc. ACM Softw. Eng. 2 (FSE), статья FSE013, июль 2025}
 }
 
 @misc{valsorda2025-survey,
@@ -170,18 +172,23 @@
 }
 
 @misc{strace2020-seccompbpf,
-  author = {Lyashko, Paul Chaignon},
+  author = {Chaignon, Paul},
   title  = {strace --seccomp-bpf: a look under the hood},
   year   = {2020},
-  note   = {FOSDEM 2020. TODO: уточнить докладчика},
+  note   = {Доклад на FOSDEM 2020 (02.02.2020); слайды: https://pchaigno.github.io/assets/strace-seccomp-bpf.pdf. Сборка ядра с трассировкой connect: 24m54s без фильтра, 12m48s с --seccomp-bpf, 12m27s нативно},
   url    = {https://archive.fosdem.org/2020/schedule/event/debugging_strace_bpf/}
 }
 
-@misc{aquila2025-telemetry,
-  title = {Aquila: Efficient In-Kernel System Call Telemetry for Cloud-Native Environments},
-  year  = {2025},
-  url   = {https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12608121/},
-  note  = {TODO: уточнить авторов и venue}
+@article{aquila2025-telemetry,
+  author  = {Shin, Juyong and Kim, Jisu and Nam, Jaehyun},
+  title   = {Aquila: Efficient In-Kernel System Call Telemetry for Cloud-Native Environments},
+  journal = {Sensors},
+  volume  = {25},
+  number  = {21},
+  pages   = {6511},
+  year    = {2025},
+  doi     = {10.3390/s25216511},
+  url     = {https://www.mdpi.com/1424-8220/25/21/6511}
 }
 
 @misc{shen2024-aschook,
@@ -223,6 +230,74 @@
   doi       = {10.1145/3641525.3663627},
   url       = {https://dl.acm.org/doi/10.1145/3641525.3663627},
   note      = {45 провенанс-коллекторов из литературы, 9 воспроизведены; единый бенчмарк-сьют. Компиляция gcc: strace +206 %, CARE +136 %, RR +321 %, ReproZip +344 %, fsatrace (library interposition) +4 %}
+}
+
+@misc{mao2025-provcompleteness,
+  author        = {Mao, Jinsong and Ujcich, Benjamin E. and Ma, Shiqing},
+  title         = {Rethinking Provenance Completeness with a Learning-Based Linux Scheduler},
+  year          = {2025},
+  eprint        = {2510.08479},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2510.08479},
+  note          = {«Super producer threat»: под нагрузкой провенанс-коллекторы теряют события, то есть полнота трассы это свойство безопасности, а не только производительности}
+}
+
+% ============================================================
+% Build systems: трассировка файловых обращений ради корректности
+% ============================================================
+
+@inproceedings{ren2019-reptrace,
+  author    = {Ren, Zhilei and Liu, Changlin and Xiao, Xusheng and Jiang, He and Xie, Tao},
+  title     = {Root Cause Localization for Unreproducible Builds via Causality Analysis Over System Call Tracing},
+  booktitle = {Proc. 34th IEEE/ACM International Conference on Automated Software Engineering (ASE)},
+  pages     = {527--538},
+  year      = {2019},
+  doi       = {10.1109/ASE.2019.00056},
+  note      = {RepTrace: граф причинности по syscall-трассе сборки (read/write между процессами + parent/child); Top-10 точность 90,00 % по командам и 90,56 % по файлам}
+}
+
+@article{spall2020-rattle,
+  author  = {Spall, Sarah and Mitchell, Neil and Tobin-Hochstadt, Sam},
+  title   = {Build Scripts with Perfect Dependencies},
+  journal = {Proceedings of the ACM on Programming Languages},
+  volume  = {4},
+  number  = {OOPSLA},
+  pages   = {1--28},
+  year    = {2020},
+  doi     = {10.1145/3428237},
+  eprint        = {2007.12737},
+  archivePrefix = {arXiv},
+  note    = {Rattle: зависимости не объявляются, а наблюдаются трассировкой ФС (fsatrace); «perfect dependencies» = множество фактически прочитанных файлов}
+}
+
+@inproceedings{lyu2024-builddeperrors,
+  author    = {Lyu, Jun and Li, Shanshan and Zhang, He and Zhang, Yang and Rong, Guoping and Rigger, Manuel},
+  title     = {Detecting Build Dependency Errors in Incremental Builds},
+  booktitle = {Proc. 33rd ACM SIGSOFT International Symposium on Software Testing and Analysis (ISSTA)},
+  pages     = {1--12},
+  year      = {2024},
+  doi       = {10.1145/3650212.3652105},
+  eprint        = {2404.13295},
+  archivePrefix = {arXiv},
+  note      = {Missing/redundant dependencies в make-скриптах без чистой пересборки; фактические обращения против объявленных}
+}
+
+@misc{buildxl-sandboxing,
+  author       = {{Microsoft}},
+  title        = {BuildXL: Sandboxing (file access monitoring) and Core Concepts},
+  year         = {2026},
+  howpublished = {Документация репозитория microsoft/BuildXL},
+  url          = {https://github.com/microsoft/BuildXL/blob/main/Documentation/Specs/Sandboxing.md},
+  note         = {Промышленная система: Detours на Windows, interpose + ptrace на Linux; наблюдённые обращения входят в ключ кэша, недекларированный вход = file-access violation}
+}
+
+@misc{mitchell2020-filetracing,
+  author       = {Mitchell, Neil},
+  title        = {File Access Tracing},
+  year         = {2020},
+  howpublished = {Neil Mitchell's Blog},
+  url          = {http://neilmitchell.blogspot.com/2020/05/file-tracing.html},
+  note         = {Разбор четырёх механизмов трассировки ФС (ptrace, LD_PRELOAD/fsatrace, Detours, FUSE) и их слепых зон; практическая база для выбора в Цели 1}
 }
 
 % ============================================================
@@ -285,12 +360,12 @@
 }
 
 @inproceedings{feng2019-b2sfinder,
-  author    = {Feng, Zimu and Yuan, Zimin and others},
+  author    = {Yuan, Zimu and Feng, Muyue and Li, Feng and Ban, Gu and Xiao, Yang and Wang, Shiyang and Tang, Qian and Su, He and Yu, Chendong and Xu, Jiahuan and Piao, Aihua and Xue, Jingling and Huo, Wei},
   title     = {B2SFinder: Detecting Open-Source Software Reuse in COTS Software},
-  booktitle = {Proc. 34th IEEE/ACM ASE},
+  booktitle = {Proc. 34th IEEE/ACM International Conference on Automated Software Engineering (ASE)},
+  pages     = {1038--1049},
   year      = {2019},
-  doi       = {10.1109/ASE.2019.00100},
-  note      = {TODO: уточнить авторов}
+  doi       = {10.1109/ASE.2019.00100}
 }
 
 @article{b2smatcher2021-version,
@@ -332,13 +407,13 @@
 }
 
 @article{kim2025-bm25sca,
-  author  = {Kim, J. W. and Choi, M. J.},
+  author  = {Kim, Jong-Wouk and Choi, Mi-Jung},
   title   = {A cross-language and cross-binary type approach to binary-source software composition analysis using BM25},
   journal = {International Journal of Information Security},
   year    = {2025},
   doi     = {10.1007/s10207-025-01148-3},
   url     = {https://link.springer.com/article/10.1007/s10207-025-01148-3},
-  note    = {Binary-source SCA для 5 языков (C/C++, Obj-C, Swift, Go); BM25-токены; recall до 81,4 %. TODO: полные имена авторов}
+  note    = {Binary-source SCA для 5 языков (C/C++, Obj-C, Swift, Go); BM25-токены; recall до 81,4 %. Онлайн 04.11.2025}
 }
 
 @article{zou2025-bincofer,
@@ -360,6 +435,28 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2606.28870},
   note          = {Препринт от 27.06.2026, 21 стр. 60 тыс. прошивок от 200 вендоров. Четыре фактора качества BCSD: версия уязвимой функции, область поиска, размер функции, тулчейн компиляции. Build-aware запрос поднимает MRR с 0,818 до 0,981; двухэтапный TPL-aware поиск даёт +18,5 %}
+}
+
+@incollection{pereira2024-zeroshotsbom,
+  author    = {Pereira, Devin and Molloy, Christopher and Acharya, Sudipta and Ding, Steven H. H.},
+  title     = {Automating SBOM Generation with Zero-Shot Semantic Similarity},
+  booktitle = {Signals and Communication Technology},
+  pages     = {65--77},
+  year      = {2025},
+  doi       = {10.1007/978-3-031-89994-2_6},
+  eprint        = {2403.08799},
+  archivePrefix = {arXiv},
+  note      = {Трансформер связывает имя продукта с version-строками внутри бинаря; zero-shot вместо паттернов. Препринт arXiv 03.02.2024, 8 стр.}
+}
+
+@misc{song2024-coejsbundles,
+  author        = {Song, Leo and Ding, Steven H. H. and Tian, Yuan and Li, Li Tao and Charland, Philippe and Walenstein, Andrew},
+  title         = {Chain-of-Experts (CoE): Reverse Engineering Software Bills of Materials for JavaScript Application Bundles through Code Clone Search},
+  year          = {2024},
+  eprint        = {2408.16198},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2408.16198},
+  note          = {SBOM по собранному JS-бандлу (символы срезаны, границы модулей потеряны): сегментация + классификация + поиск клонов; 500 бандлов, 66 тыс. зависимостей}
 }
 
 % ============================================================
@@ -392,21 +489,23 @@
 }
 
 @misc{android2024-vendorblobs,
+  author        = {Wen, Elliott and Shen, Jiaxing and Wuensche, Burkhard},
   title         = {Keep Me Updated: An Empirical Study of Proprietary Vendor Blobs in Android Firmware},
   year          = {2024},
   eprint        = {2410.11075},
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2410.11075},
-  note          = {TODO: уточнить авторов}
+  note          = {30th International Conference on Parallel and Distributed Systems (ICPADS)}
 }
 
 @misc{linux2024-malware-prevention,
+  author        = {Vu, Duc-Ly and Dunlap, Trevor and Obermeier-Velazquez, Karla and Nguyen, Thanh-Cong and Gibert, Paul and Meyers, John Speed and Torres-Arias, Santiago},
   title         = {A Study of Malware Prevention in Linux Distributions},
   year          = {2024},
   eprint        = {2411.11017},
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2411.11017},
-  note          = {Контекст XZ/liblzma backdoor. TODO: уточнить авторов}
+  note          = {Контекст XZ/liblzma backdoor}
 }
 
 % ============================================================
@@ -414,21 +513,22 @@
 % ============================================================
 
 @inproceedings{ares2024-sbom-accuracy,
+  author    = {Halbritter, Andreas and Merli, Dominik},
   title     = {Accuracy Evaluation of SBOM Tools for Web Applications and System-Level Software},
-  booktitle = {Proc. ARES},
+  booktitle = {Proc. 19th International Conference on Availability, Reliability and Security (ARES)},
+  pages     = {1--9},
   year      = {2024},
   doi       = {10.1145/3664476.3670926},
-  url       = {https://dl.acm.org/doi/fullHtml/10.1145/3664476.3670926},
-  note      = {TODO: уточнить авторов}
+  url       = {https://dl.acm.org/doi/fullHtml/10.1145/3664476.3670926}
 }
 
 @misc{sbom2025-slr,
+  author        = {O'Donoghue, Eric and Hastings, Yvette and Ortiz, Ernesto and Manzi Muneza, A. Redempta},
   title         = {Software Bill of Materials in Software Supply Chain Security: A Systematic Literature Review},
   year          = {2025},
   eprint        = {2506.03507},
   archivePrefix = {arXiv},
-  url           = {https://arxiv.org/pdf/2506.03507},
-  note          = {TODO: уточнить авторов}
+  url           = {https://arxiv.org/pdf/2506.03507}
 }
 
 @misc{ozkan2024-sbomintegrity,
@@ -483,6 +583,15 @@
   note      = {2414 репозиториев: lock-файлы дают точный SBOM, но сканеры выдают 92,0 % ложных срабатываний; анализ вызовов функций снимает 61,9 % из них}
 }
 
+@inproceedings{xiao2025-jbomaudit,
+  author    = {Xiao, Yue and Kirat, Dhilung and Schales, Douglas Lee and Jang, Jiyong and Xing, Luyi and Liao, Xiaojing},
+  title     = {JBomAudit: Assessing the Landscape, Compliance, and Security Implications of Java SBOMs},
+  booktitle = {Proc. Network and Distributed System Security Symposium (NDSS)},
+  year      = {2025},
+  doi       = {10.14722/ndss.2025.240322},
+  note      = {IBM Research + Indiana University; 25 882 SBOM против содержимого соответствующих JAR: 7 907 не раскрывают прямые зависимости, 4,97 % пропущенного уязвимо}
+}
+
 % ============================================================
 % Frameworks: attestation / reproducible builds
 % ============================================================
@@ -506,12 +615,12 @@
 }
 
 @misc{attestable2025-tee,
+  author        = {Hugenroth, Daniel and Lins, Mario and Mayrhofer, Ren{\'e} and Beresford, Alastair R.},
   title         = {Attestable builds: compiling verifiable binaries on untrusted systems using trusted execution environments},
   year          = {2025},
   eprint        = {2505.02521},
   archivePrefix = {arXiv},
-  url           = {https://arxiv.org/abs/2505.02521},
-  note          = {TODO: уточнить авторов}
+  url           = {https://arxiv.org/abs/2505.02521}
 }
 
 @inproceedings{muto2026-attestablechain,
@@ -677,10 +786,11 @@
 }
 
 @misc{patent2019-10296326,
-  title = {US Patent 10,296,326: Method and system for identifying open-source software package based on binary files},
+  author = {Kim, Younggon and Kang, Tae-Jin and Cho, Si Haeng},
+  title = {US Patent 10,296,326 B2: Method and system for identifying open-source software package based on binary files},
   year  = {2019},
-  url   = {https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/10296326},
-  note  = {TODO: assignee, прочитать}
+  url   = {https://patents.google.com/patent/US10296326B2/en},
+  note  = {Assignee: Insignary Inc; подача 2018-01-31, выдача 2019-05-21. База хешей эталонных бинарей + similarity-хеш как запасной путь по имени файла}
 }
 
 @misc{patent2017-9535687,
@@ -704,4 +814,12 @@
   year   = {2025},
   note   = {Assignee: Microsoft Technology Licensing; выдача 2025-06-17. SBOM для больших распределённых сборок: отбрасывает неиспользуемые файлы, добавляет инкорпорированные, но неатрибутированные фрагменты},
   url    = {https://patents.google.com/patent/US12333020B2/en}
+}
+
+@misc{patent2026-12549587,
+  author = {Sharma, Varun and Kurmi, Ashish},
+  title  = {US Patent 12,549,587 B2: Correlating outbound traffic and file events with a CI/CD pipeline},
+  year   = {2026},
+  note   = {Assignee: Step Security Inc (продукт Harden-Runner); подача 2024-01-27, выдача 2026-02-10. Claim 1: SBOM по компонентам, выведенным из runtime-событий шага конвейера},
+  url    = {https://patents.google.com/patent/US12549587B2/en}
 }
