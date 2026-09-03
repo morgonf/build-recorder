@@ -126,6 +126,17 @@
   note          = {Модель AStRA: систематизация элементов supply chain и оценка защит}
 }
 
+@misc{ginesin2026-githashmalleability,
+  author        = {Ginesin, Jacob},
+  title         = {Git Hash Chain Malleability},
+  year          = {2026},
+  month         = {7},
+  eprint        = {2607.02820},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2607.02820},
+  note          = {Из подписанного коммита без ключа получается второй, отличный по хешу, с тем же деревом и валидной подписью (инверсия ECDSA s -> n-s, вставка неподписываемого OpenPGP-субпакета, переупаковка DER в S/MIME); GitHub показывает Verified для всех трёх, git verify-commit для двух}
+}
+
 % ============================================================
 % Смежные работы той же лаборатории (ИСП РАН)
 % ============================================================
@@ -240,6 +251,17 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2510.08479},
   note          = {«Super producer threat»: под нагрузкой провенанс-коллекторы теряют события, то есть полнота трассы это свойство безопасности, а не только производительности}
+}
+
+@misc{houssel2026-kerneltelemetry,
+  author        = {Houssel, Paul R. B. and Levillain, Olivier and Laniepce, Sylvie and Dejon, Nicolas and Debar, Herv\'e},
+  title         = {A Study of Kernel Telemetry Options for Security-Oriented Provenance},
+  year          = {2026},
+  month         = {8},
+  eprint        = {2608.11418},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2608.11418},
+  note          = {Telecom SudParis + Orange Innovation. Пять механизмов сбора (ptrace, снимки ФС, интегрированные системы, модуль ядра, eBPF) по пяти критериям; ptrace оценён худшим по эффективности, видимости и устойчивости. Восемь provenance-систем и пять агентов на стенде: потери событий до 95-96 %, eAudit (81 syscall, per-CPU ring buffers) теряет 0 при 5,9 % / 12 % накладных, но не строит граф}
 }
 
 % ============================================================
@@ -459,6 +481,17 @@
   note          = {SBOM по собранному JS-бандлу (символы срезаны, границы модулей потеряны): сегментация + классификация + поиск клонов; 500 бандлов, 66 тыс. зависимостей}
 }
 
+@misc{junaid2026-kestrel,
+  author        = {Bin Junaid, Muhammad Shaheer},
+  title         = {Static Detection of Post-Quantum Cryptographic Algorithms in Stripped Binaries for Digital Forensic Examination and Migration Assurance},
+  year          = {2026},
+  month         = {8},
+  eprint        = {2608.25122},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2608.25122},
+  note          = {Kestrel: опознание ML-KEM и ML-DSA в очищенном статически слинкованном бинаре по таблицам констант NTT, выведенным из публичных параметров схемы; recall 128 из 128 при нуле ложных на четырёх независимых реализациях. На 6 224 бинарях рабочей Linux-системы найдено 12 некаталогизированных программ с ML-KEM, включая OpenSSH и стек управления контейнерами}
+}
+
 % ============================================================
 % Предсобранные бинарники / phantom dependencies в экосистемах
 % ============================================================
@@ -590,6 +623,39 @@
   year      = {2025},
   doi       = {10.14722/ndss.2025.240322},
   note      = {IBM Research + Indiana University; 25 882 SBOM против содержимого соответствующих JAR: 7 907 не раскрывают прямые зависимости, 4,97 % пропущенного уязвимо}
+}
+
+@misc{zieba2026-noedges,
+  author        = {Zi{\k e}ba-Kozarzewski, Artur},
+  title         = {No Edges, No Verdict: A Large-Scale Empirical Study of Declared Dependency Graphs in 78K SBOMs in the Wild},
+  year          = {2026},
+  month         = {7},
+  eprint        = {2607.22140},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2607.22140},
+  note          = {77 092 разобранных SBOM корпуса Wild SBOMs: 52,9 % без единого ребра зависимостей (нарушение NTIA minimum elements), 8,8 % вырожденных (медианная доля изолированных компонентов 93 %), 38,3 % связных. Долю рёбер определяет генератор, а не описываемое ПО (0-100 % по инструментам); CycloneDX compositions использован в 0,10 % документов}
+}
+
+@misc{bhuiyan2026-githubsboms,
+  author        = {Bhuiyan, Kawsar Ahmed and Besbes, Mohamed Bilel and Raj, Rachna and Al Assil, Adam and Costa, Diego Elias},
+  title         = {Beyond Compliance: A Large Scale Study on the Completeness and Consistency of the GitHub SBOMs},
+  year          = {2026},
+  month         = {7},
+  eprint        = {2607.04614},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2607.04614},
+  note          = {10 000 репозиториев, 10 языковых экосистем: автогенерируемые GitHub SBOM против Syft, Trivy и Microsoft SBOM Tool. NTIA-соответствие не достигается, наличие версии и лицензии сильно зависит от экосистемы}
+}
+
+@misc{moriwaki2026-sbomunifier,
+  author        = {Moriwaki, Yusuke and Kanda, Tetsuya and Manabe, Yuki and Qiu, Shi and Yang, Shiyu and Makihara, Erina and Yoshida, Norihiro and Inoue, Katsuro},
+  title         = {sbom-unifier: Integration Framework for Heterogeneous SBOMs},
+  year          = {2026},
+  month         = {8},
+  eprint        = {2608.30708},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2608.30708},
+  note          = {ICSME 2026, Tool Demonstrations Track. Слияние выводов нескольких генераторов по PURL с приоритетным доопределением полей; 90 проектов, 9 языков, доля полностью покрытых полей SPDX 2.3 выше на 8 п.п., доля полностью отсутствующих ниже на 11 п.п. лучшего одиночного инструмента}
 }
 
 % ============================================================
@@ -741,6 +807,26 @@
   note          = {Таксономия 6 корневых причин невоспроизводимости Java-сборок (манифесты, SBOM, ФС, байткод JVM, версии, таймстемпы); канонизация байткода (jNorm, OSS-Rebuild)}
 }
 
+@misc{keshani2026-aroma,
+  author        = {Keshani, Mehdi and Rahmati, Amirhossein and Aref, Mohammad Hossein and Heydarnoori, Abbas},
+  title         = {AROMA+: A Study of Factors Affecting Reproducible Builds in the Maven Ecosystem},
+  year          = {2026},
+  month         = {8},
+  eprint        = {2608.27125},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2608.27125},
+  note          = {Расширенная версия статьи FSE 2024, под ревью в Empirical Software Engineering. Автоматическое восстановление по артефакту Maven Central его исходного репозитория и параметров исходного окружения сборки (JDK, ОС, версия плагина) эвристиками; до 99,8 % совпадения по полям с ручной разметкой Reproducible Central, найдены ошибки ручной разметки}
+}
+
+@misc{slsa2026-provenance,
+  author       = {{SLSA Community}},
+  title        = {SLSA Build Provenance, specification v1.2},
+  year         = {2026},
+  howpublished = {Спецификация, The Linux Foundation, Community Specification License 1.0},
+  url          = {https://slsa.dev/spec/v1.2/provenance},
+  note         = {Статус Approved на 2026-09-01. Поле resolvedDependencies: <<The resolvedDependencies captures these dependencies, if known>>; <<At SLSA Build L3, completeness is considered best effort>>. TODO: уточнить дату публикации v1.2}
+}
+
 % ============================================================
 % Стандарты
 % ============================================================
@@ -750,6 +836,22 @@
   organization = {Российский институт стандартизации},
   year         = {2024},
   note         = {Введён 2024-04-01; п. о журналировании трансляции — мотивация Buildography}
+}
+
+@misc{fstec2026-metodika,
+  author = {{ФСТЭК России}},
+  title  = {Методика выявления уязвимостей и недекларированных возможностей в программном обеспечении},
+  year   = {2026},
+  url    = {https://fstec.ru/dokumenty/vse-dokumenty/spetsialnye-normativnye-dokumenty},
+  note   = {Утверждена 12.05.2026, отменяет методику от 25.12.2020; приведена в соответствие с ГОСТ Р 56939-2024, вводит 6 уровней доверия. По вторичным источникам (RTM Group, 2026) обязывает представлять перечни программных компонентов и образов контейнеров в машиночитаемом CycloneDX с хеш-суммами (в т.ч. Стрибог), ссылками на репозитории и свойствами поверхности атаки; корректность SBOM проверяет испытательная лаборатория. TODO: сверить с первичным текстом, fstec.ru недоступен из рабочей сети}
+}
+
+@misc{eu2024-cra,
+  author = {{European Parliament and Council of the European Union}},
+  title  = {Regulation (EU) 2024/2847 on horizontal cybersecurity requirements for products with digital elements (Cyber Resilience Act)},
+  year   = {2024},
+  url    = {https://eur-lex.europa.eu/eli/reg/2024/2847/oj},
+  note   = {Приложение I, часть II, п. 1: производитель обязан выявлять и документировать компоненты продукта, включая SBOM в распространённом машиночитаемом формате, покрывающий как минимум зависимости верхнего уровня. Обязанности по уведомлению об уязвимостях с 11.09.2026, основные требования с 11.12.2027. TODO: формулировка приложения приведена по вторичным источникам, eur-lex отдаёт бот-заглушку}
 }
 
 % ============================================================
