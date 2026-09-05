@@ -20,6 +20,7 @@ from brec.classify import (
     VENDOR_DIRS,
     classify_files,
     classify_roles,
+    file_role,
     is_build_artifact,
     is_vendor_path,
     vendor_dir,
@@ -39,6 +40,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 TINY_OUT = FIXTURES / "tiny.out"
 SAMPLE_OUT = FIXTURES / "classify_sample.out"
 RPM_DUMP = FIXTURES / "classify_rpm_dump.txt"
+
+def _script_source(filename: str) -> str:
+    """Return the text of a top-level CLI script."""
+    return (Path(__file__).parent.parent / filename).read_text(encoding="utf-8")
+
 
 def _load_script(filename: str):
     """Import a top-level CLI script whose name is not a valid module name."""
@@ -366,8 +372,7 @@ def test_classify_vendored_path_patterns(abspath: str) -> None:
 def test_equiv_verify_buckets_tiny() -> None:
     """classify_files on tiny.out reproduces verify-build.py static_sources bucket."""
     # verify-build.py perspective
-    vb_files, vb_procs = _vb.parse_graph(TINY_OUT)
-    vb_deps = _vb.analyze(vb_files, vb_procs)
+    vb_deps = _vb.analyze(parse_out(TINY_OUT))
     vb_sources = {f.abspath for f in vb_deps.static_sources}
 
     # classify_files perspective: PROJECT files read by compiler with source extension
@@ -391,8 +396,7 @@ def test_equiv_verify_static_headers_sample() -> None:
     results = classify_files(graph, [backend])
 
     # verify-build.py: static_headers = headers read by compiler
-    vb_files, vb_procs = _vb.parse_graph(SAMPLE_OUT)
-    vb_deps = _vb.analyze(vb_files, vb_procs)
+    vb_deps = _vb.analyze(parse_out(SAMPLE_OUT))
     vb_header_paths = {f.abspath for f in vb_deps.static_headers}
 
     # classify_files: SYSTEM_STATIC headers read by compiler (has package)
@@ -415,8 +419,7 @@ def test_equiv_verify_dynamic_libs_sample() -> None:
     backend = make_rpm_backend()
     results = classify_files(graph, [backend])
 
-    vb_files, vb_procs = _vb.parse_graph(SAMPLE_OUT)
-    vb_deps = _vb.analyze(vb_files, vb_procs)
+    vb_deps = _vb.analyze(parse_out(SAMPLE_OUT))
     vb_dynamic = {f.abspath for f in vb_deps.dynamic_libs}
 
     cl_dynamic = {cf.file.abspath for cf in results if cf.dep_class == DepClass.SYSTEM_DYNAMIC}
@@ -666,3 +669,35 @@ def test_vendor_helpers_are_shared() -> None:
     assert vb.is_vendor_path is is_vendor_path
     assert not hasattr(sb, "VENDOR_DIRS")
     assert not hasattr(vb, "_is_vendor_path")
+    # verify-build.py used to carry the vendor segment names a third time,
+    # inside collect_vendored_groups().
+    assert "VENDOR_PARTS" not in _script_source("verify-build.py")
+
+
+# ── file_role ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("abspath,expected", [
+    ("/usr/lib/libz.so.1",          "dynamic_lib"),
+    ("/usr/lib/libz.so",            "dynamic_lib"),
+    ("/usr/lib/libz.a",             "static_archive"),
+    ("/usr/include/stdio.h",        "header"),
+    ("/src/x.hpp",                  "header"),
+    ("/src/x.c",                    "source"),
+    ("/src/x.cpp",                  "source"),
+    ("/build/x.o",                  "object"),
+    ("/src/boot.s",                 "assembly"),
+    ("/src/boot.S",                 "assembly"),
+    ("/src/boot.asm",               "assembly"),
+    ("/usr/bin/gcc",                "other"),
+    ("/src/build.py",               "other"),
+])
+def test_file_role(abspath: str, expected: str) -> None:
+    assert file_role(abspath) == expected
+
+
+def test_file_role_is_shared_with_verify_build() -> None:
+    """verify-build.py sorts its report by this role and must not redefine it."""
+    vb = _load_script("verify-build.py")
+    assert vb.file_role is file_role
+    # ... and must not resurrect a FileNode of its own around it.
+    assert vb.FileNode is FileNode

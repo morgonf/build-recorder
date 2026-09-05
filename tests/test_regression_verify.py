@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from brec.model import parse_out
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -38,31 +40,35 @@ def _normalize(text: str) -> str:
     return text
 
 
-# ── Adapter correctness ───────────────────────────────────────────────────────
+# ── The parser contract verify-build.py relies on ─────────────────────────────
+#
+# verify-build.py used to keep its own FileNode/ProcessNode and convert
+# brec.model's graph into them.  The converter is gone and the report reads the
+# graph directly, so what these tests guard is that graph, in the shapes the
+# report needs: hashes, read/write edges, and enrichment fields in both the
+# flat and the grouped .out layout.
 
-def test_parse_graph_file_count(tiny_out: Path) -> None:
-    files, procs = vb.parse_graph(tiny_out)
-    assert len(files) == 3
-    assert len(procs) == 2
+def test_graph_file_count(tiny_out: Path) -> None:
+    graph = parse_out(tiny_out)
+    assert len(graph.files) == 3
+    assert len(graph.procs) == 2
 
 
-def test_parse_graph_file_fields(tiny_out: Path) -> None:
-    files, _ = vb.parse_graph(tiny_out)
-    f1 = files[":f1"]
+def test_graph_file_fields(tiny_out: Path) -> None:
+    f1 = parse_out(tiny_out).files[":f1"]
     assert f1.abspath == "/home/user/project/hello.c"
-    assert f1.git_hash == "aabbcc0000000000000000000000000000000001"
+    assert f1.git_blob_sha1 == "aabbcc0000000000000000000000000000000001"
 
 
-def test_parse_graph_proc_relations(tiny_out: Path) -> None:
-    _, procs = vb.parse_graph(tiny_out)
-    p1 = procs[":p1"]
-    assert p1.exe_uri == ":f0"
+def test_graph_proc_relations(tiny_out: Path) -> None:
+    p1 = parse_out(tiny_out).procs[":p1"]
+    assert p1.executable == ":f0"
     assert ":f1" in p1.reads
     assert ":f2" in p1.writes
 
 
-def test_parse_graph_enrichment_fields(tmp_path: Path) -> None:
-    """Adapter correctly maps dep_type, rpm_name, rpm_nevra from enriched .out."""
+def test_graph_enrichment_fields(tmp_path: Path) -> None:
+    """dep_type, rpm_name and rpm_nevra survive parsing of an enriched .out."""
     out = tmp_path / "enriched.out"
     out.write_text(
         "@prefix : <http://build-recorder.org/data#> .\n"
@@ -76,15 +82,14 @@ def test_parse_graph_enrichment_fields(tmp_path: Path) -> None:
         ':f0 b:rpm_package "glibc-devel-2.35-alt1.x86_64" .\n',
         encoding="utf-8",
     )
-    files, _ = vb.parse_graph(out)
-    f0 = files[":f0"]
+    f0 = parse_out(out).files[":f0"]
     assert f0.dep_type  == "static_header"
     assert f0.rpm_name  == "glibc-devel"
     assert f0.rpm_nevra == "glibc-devel-2.35-alt1.x86_64"
 
 
-def test_parse_graph_enrichment_grouped_format(tmp_path: Path) -> None:
-    """Adapter works with grouped/enrichment-block format (bare URI + indented lines)."""
+def test_graph_enrichment_grouped_format(tmp_path: Path) -> None:
+    """Same, in the grouped enrichment-block layout (bare URI + indented lines)."""
     out = tmp_path / "grouped_enriched.out"
     out.write_text(
         "@prefix : <http://build-recorder.org/data#> .\n"
@@ -99,8 +104,7 @@ def test_parse_graph_enrichment_grouped_format(tmp_path: Path) -> None:
         '    b:rpm_package "zlib-1.2.11-alt1.x86_64" .\n',
         encoding="utf-8",
     )
-    files, _ = vb.parse_graph(out)
-    f0 = files[":f0"]
+    f0 = parse_out(out).files[":f0"]
     assert f0.dep_type  == "dynamic_lib"
     assert f0.rpm_name  == "zlib"
     assert f0.rpm_nevra == "zlib-1.2.11-alt1.x86_64"
@@ -111,9 +115,9 @@ def test_parse_graph_enrichment_grouped_format(tmp_path: Path) -> None:
 @pytest.fixture(scope="module")
 def tiny_analysis():
     out_path = FIXTURES_DIR / "tiny.out"
-    files, procs = vb.parse_graph(out_path)
-    deps = vb.analyze(files, procs)
-    return deps, files, out_path
+    graph = parse_out(out_path)
+    deps = vb.analyze(graph)
+    return deps, graph.files, out_path
 
 
 def test_verify_json_golden(tiny_analysis) -> None:

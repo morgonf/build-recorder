@@ -26,125 +26,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import brec.ir as _brec_ir
-from brec.classify import classify_roles as _brec_classify_roles
-from brec.classify import is_build_artifact, is_vendor_path
-from brec.model import parse_out as _brec_parse_out
+from brec.classify import (
+    classify_roles,
+    file_role,
+    is_build_artifact,
+    is_vendor_path,
+    vendor_dir as vendor_dir_of,
+)
+from brec.components import Component, upstream_for
+from brec.ir import BuildGraph, FileNode
+from brec.model import parse_out
 
-# ── Data structures ───────────────────────────────────────────────────────────
+# ── File predicates ───────────────────────────────────────────────────────────
+#
+# Report-level questions asked of a brec.ir.FileNode.  The graph itself is
+# brec's; only the wording of the report lives here.
 
-@dataclass
-class FileNode:
-    uri: str
-    abspath: str = ""
-    git_hash: str = ""
-    dep_type: str = ""
-    rpm_name: str = ""
-    rpm_nevra: str = ""
-
-    @property
-    def name(self) -> str:
-        return Path(self.abspath).name
-
-    @property
-    def role(self) -> str:
-        n = self.name.lower()
-        if ".so." in n or n.endswith(".so"):
-            return "dynamic_lib"
-        if n.endswith(".a"):
-            return "static_archive"
-        if n.endswith((".h", ".hpp", ".hh", ".h++")):
-            return "header"
-        if n.endswith((".c", ".cpp", ".cc", ".cxx", ".c++")):
-            return "source"
-        if n.endswith(".o"):
-            return "object"
-        if n.endswith((".s", ".S", ".asm")):
-            return "assembly"
-        return "other"
-
-    @property
-    def is_from_rpm(self) -> bool:
-        return bool(self.rpm_name)
-
-    @property
-    def is_project_source(self) -> bool:
-        return self.dep_type == "project_source" and not self.rpm_name
-
-    @property
-    def is_vendored(self) -> bool:
-        return self.is_project_source and is_vendor_path(self.abspath)
-
-    @property
-    def provenance(self) -> str:
-        if self.rpm_nevra:
-            return self.rpm_nevra
-        if self.is_vendored:
-            return "VENDORED (not from any RPM)"
-        if self.is_project_source:
-            return "project source"
-        return "unknown"
+def is_from_rpm(f: FileNode) -> bool:
+    return bool(f.rpm_name)
 
 
-@dataclass
-class ProcessNode:
-    uri: str
-    exe_uri: Optional[str] = None      # URI of executable file
-    reads:   list[str] = field(default_factory=list)   # file URIs
-    writes:  list[str] = field(default_factory=list)   # file URIs
-    renames: list[str] = field(default_factory=list)   # file URIs (new name after rename)
+def is_project_source(f: FileNode) -> bool:
+    return f.dep_type == "project_source" and not f.rpm_name
 
 
-def _to_build_graph_for_roles(
-    files: dict[str, "FileNode"],
-    procs: dict[str, "ProcessNode"],
-) -> "_brec_ir.BuildGraph":
-    """Build a minimal BuildGraph so brec.classify.classify_roles() can set roles."""
-    brec_files = {
-        uri: _brec_ir.FileNode(
-            uri=uri, abspath=f.abspath, name=f.name,
-            size=0, git_blob_sha1=f.git_hash,
-        )
-        for uri, f in files.items()
-    }
-    brec_procs = {
-        uri: _brec_ir.ProcessNode(
-            uri=uri, pid=0, cmd="",
-            executable=p.exe_uri,
-            start=None, end=None,
-            reads=list(p.reads), writes=list(p.writes),
-            execs=[], renames=list(p.renames),
-        )
-        for uri, p in procs.items()
-    }
-    return _brec_ir.BuildGraph(files=brec_files, procs=brec_procs)
+def is_vendored(f: FileNode) -> bool:
+    return is_project_source(f) and is_vendor_path(f.abspath)
 
-# ── Parser ────────────────────────────────────────────────────────────────────
 
-def parse_graph(out_file: Path) -> tuple[dict[str, "FileNode"], dict[str, "ProcessNode"]]:
-    """Build (files_by_uri, procs_by_uri) via brec.model.parse_out()."""
-    graph = _brec_parse_out(out_file)
+def provenance(f: FileNode) -> str:
+    if f.rpm_nevra:
+        return f.rpm_nevra
+    if is_vendored(f):
+        return "VENDORED (not from any RPM)"
+    if is_project_source(f):
+        return "project source"
+    return "unknown"
 
-    files: dict[str, FileNode] = {}
-    for fn in graph.files.values():
-        local = FileNode(uri=fn.uri)
-        local.abspath   = fn.abspath
-        local.git_hash  = fn.git_blob_sha1
-        local.dep_type  = fn.dep_type
-        local.rpm_name  = fn.rpm_name
-        local.rpm_nevra = fn.rpm_nevra
-        files[fn.uri] = local
-
-    procs: dict[str, ProcessNode] = {}
-    for pn in graph.procs.values():
-        local = ProcessNode(uri=pn.uri)
-        local.exe_uri  = pn.executable
-        local.reads    = list(pn.reads)
-        local.writes   = list(pn.writes)
-        local.renames  = list(pn.renames)
-        procs[pn.uri] = local
-
-    return files, procs
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
@@ -162,16 +80,14 @@ class BuildDeps:
     artifacts:        list[FileNode] = field(default_factory=list)
 
 
-def analyze(files: dict[str, FileNode],
-            procs: dict[str, ProcessNode]) -> BuildDeps:
+def analyze(graph: BuildGraph) -> BuildDeps:
     deps = BuildDeps()
     seen_static:  set[str] = set()
     seen_dynamic: set[str] = set()
     seen_artifact: set[str] = set()
 
-    # Use brec.classify for process-role determination (replaces local _proc_kind)
-    _graph = _to_build_graph_for_roles(files, procs)
-    _brec_classify_roles(_graph)
+    files, procs = graph.files, graph.procs
+    classify_roles(graph)
 
     # Pre-compute set of URIs written OR renamed during this build (= own artifacts)
     written_uris: set[str] = set()
@@ -180,15 +96,14 @@ def analyze(files: dict[str, FileNode],
         written_uris.update(proc.renames)
 
     for proc in procs.values():
-        _bp = _graph.procs.get(proc.uri)
-        kind = (_bp.role or "other") if _bp else "other"
+        kind = proc.role or "other"
 
         if kind in ("compiler", "assembler"):
             for furi in proc.reads:
                 if furi not in seen_static and furi in files:
                     f = files[furi]
                     seen_static.add(furi)
-                    role = f.role
+                    role = file_role(f.abspath)
                     if role == "header":
                         deps.static_headers.append(f)
                     elif role == "source":
@@ -200,7 +115,7 @@ def analyze(files: dict[str, FileNode],
             for furi in proc.reads:
                 if furi in files:
                     f = files[furi]
-                    role = f.role
+                    role = file_role(f.abspath)
                     if role == "dynamic_lib" and furi not in seen_dynamic:
                         seen_dynamic.add(furi)
                         # Own artifact (produced by this build) vs external dep
@@ -222,7 +137,7 @@ def analyze(files: dict[str, FileNode],
             for furi in proc.writes + proc.renames:
                 if furi not in seen_artifact and furi in files:
                     f = files[furi]
-                    if f.role == "static_archive" and is_build_artifact(f.abspath):
+                    if file_role(f.abspath) == "static_archive" and is_build_artifact(f.abspath):
                         seen_artifact.add(furi)
                         deps.artifacts.append(f)
 
@@ -241,14 +156,14 @@ def analyze(files: dict[str, FileNode],
 def _group_by_package(files: list[FileNode]) -> dict[str, list[FileNode]]:
     groups: dict[str, list[FileNode]] = defaultdict(list)
     for f in files:
-        key = f.rpm_nevra or ("VENDORED" if f.is_vendored else "PROJECT_SOURCE")
+        key = f.rpm_nevra or ("VENDORED" if is_vendored(f) else "PROJECT_SOURCE")
         groups[key].append(f)
     return dict(sorted(groups.items(), key=lambda x: (-len(x[1]), x[0])))
 
 
 def _status(f: FileNode) -> str:
-    if f.is_from_rpm:    return "✓"
-    if f.is_vendored:    return "⚠"
+    if is_from_rpm(f):    return "✓"
+    if is_vendored(f):    return "⚠"
     return "·"
 
 # ── Console report ────────────────────────────────────────────────────────────
@@ -271,17 +186,17 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
         print(f"\n  Headers ({len(deps.static_headers)} files):\n")
         for nevra, grp in _group_by_package(deps.static_headers).items():
             short = nevra.split("-")[-1] if "-" in nevra and nevra != "VENDORED" else nevra
-            status = "✓" if grp[0].is_from_rpm else "⚠"
+            status = "✓" if is_from_rpm(grp[0]) else "⚠"
             print(f"  {status} {nevra:<55} {len(grp):4d} files")
 
     if deps.static_archives:
         print(f"\n  Static archives ({len(deps.static_archives)}):\n")
         for f in sorted(deps.static_archives, key=lambda x: x.name):
-            print(f"  {_status(f)}  {f.name:<40} {f.provenance}")
+            print(f"  {_status(f)}  {f.name:<40} {provenance(f)}")
 
     if deps.static_sources:
-        vendored = [f for f in deps.static_sources if f.is_vendored]
-        own_src  = [f for f in deps.static_sources if not f.is_vendored]
+        vendored = [f for f in deps.static_sources if is_vendored(f)]
+        own_src  = [f for f in deps.static_sources if not is_vendored(f)]
         print(f"\n  Source files: {len(deps.static_sources)} total  "
               f"({len(own_src)} project, {len(vendored)} vendored)\n")
         if vendored:
@@ -299,7 +214,7 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
                 else:
                     by_dir["other"].append(f)
             for vdir, vfiles in sorted(by_dir.items()):
-                hashes = " ".join(f.git_hash[:8] for f in vfiles[:3])
+                hashes = " ".join(f.git_blob_sha1[:8] for f in vfiles[:3])
                 print(f"       {vdir:<40} {len(vfiles):3d} files  sha1: {hashes}…")
 
     # ── Dynamic ───────────────────────────────────────────────────────────────
@@ -310,9 +225,9 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
         for f in deps.dynamic_libs:
             by_pkg[f.rpm_nevra or "— (path not in RPM dump)"].append(f)
         for nevra, libs in sorted(by_pkg.items(), key=lambda x: x[0]):
-            status = "✓" if libs[0].is_from_rpm else "?"
+            status = "✓" if is_from_rpm(libs[0]) else "?"
             for lib in sorted(libs, key=lambda f: f.name):
-                h = lib.git_hash[:16] if lib.git_hash else "—"
+                h = lib.git_blob_sha1[:16] if lib.git_blob_sha1 else "—"
                 print(f"  {status}  {lib.name:<45} {nevra}")
                 print(f"        hash: {h}")
     else:
@@ -332,17 +247,17 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
             if f.name in seen:
                 continue
             seen.add(f.name)
-            h = f.git_hash[:20] if f.git_hash else "—"
+            h = f.git_blob_sha1[:20] if f.git_blob_sha1 else "—"
             print(f"  {f.name:<50} sha1: {h}")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     _section("Verification summary")
     all_static = deps.static_headers + deps.static_sources + deps.static_archives
-    rpm_verified = sum(1 for f in all_static if f.is_from_rpm)
-    project_src  = sum(1 for f in all_static if f.is_project_source and not f.is_vendored)
-    vendored     = sum(1 for f in all_static if f.is_vendored)
-    dynamic_rpm  = sum(1 for f in deps.dynamic_libs if f.is_from_rpm)
-    dynamic_unk  = sum(1 for f in deps.dynamic_libs if not f.is_from_rpm)
+    rpm_verified = sum(1 for f in all_static if is_from_rpm(f))
+    project_src  = sum(1 for f in all_static if is_project_source(f) and not is_vendored(f))
+    vendored     = sum(1 for f in all_static if is_vendored(f))
+    dynamic_rpm  = sum(1 for f in deps.dynamic_libs if is_from_rpm(f))
+    dynamic_unk  = sum(1 for f in deps.dynamic_libs if not is_from_rpm(f))
 
     print(f"""
   Static inputs:
@@ -391,11 +306,11 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
 
     # Summary table
     all_static = deps.static_headers + deps.static_sources + deps.static_archives
-    rpm_static  = sum(1 for f in all_static if f.is_from_rpm)
-    own_src     = sum(1 for f in all_static if f.is_project_source and not f.is_vendored)
-    vendored    = sum(1 for f in all_static if f.is_vendored)
-    dyn_rpm     = sum(1 for f in deps.dynamic_libs if f.is_from_rpm)
-    dyn_unk     = sum(1 for f in deps.dynamic_libs if not f.is_from_rpm)
+    rpm_static  = sum(1 for f in all_static if is_from_rpm(f))
+    own_src     = sum(1 for f in all_static if is_project_source(f) and not is_vendored(f))
+    vendored    = sum(1 for f in all_static if is_vendored(f))
+    dyn_rpm     = sum(1 for f in deps.dynamic_libs if is_from_rpm(f))
+    dyn_unk     = sum(1 for f in deps.dynamic_libs if not is_from_rpm(f))
 
     W("## Summary\n")
     W("| Category | Files | Status |")
@@ -413,7 +328,7 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
     W("| Package (NEVRA) | Files | Verified |")
     W("|---|---|---|")
     for nevra, grp in _group_by_package(deps.static_headers).items():
-        ok = "✓" if grp[0].is_from_rpm else "⚠ no RPM"
+        ok = "✓" if is_from_rpm(grp[0]) else "⚠ no RPM"
         W(f"| `{nevra}` | {len(grp)} | {ok} |")
 
     # Static archives
@@ -426,11 +341,11 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
             if f.name in seen:
                 continue
             seen.add(f.name)
-            ok = "✓" if f.is_from_rpm else "⚠"
-            W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_hash[:16] or '—'}` | {ok} |")
+            ok = "✓" if is_from_rpm(f) else "⚠"
+            W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
 
     # Vendored source
-    vendored_files = [f for f in deps.static_sources if f.is_vendored]
+    vendored_files = [f for f in deps.static_sources if is_vendored(f)]
     if vendored_files:
         W("\n### ⚠ Vendored source (not from any RPM package)\n")
         W("These files are compiled directly from third-party source code "
@@ -440,15 +355,15 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
         W("|---|---|---|")
         for f in sorted(vendored_files, key=lambda x: x.abspath):
             parent = str(Path(f.abspath).parent).split("/")[-2:]
-            W(f"| `{f.name}` | `{'/'.join(parent)}` | `{f.git_hash[:16]}` |")
+            W(f"| `{f.name}` | `{'/'.join(parent)}` | `{f.git_blob_sha1[:16]}` |")
 
     # Dynamic libs
     W("\n## Dynamic Dependencies (loaded at runtime)\n")
     W("| Library | Package (NEVRA) | SHA-1 (git) | Verified |")
     W("|---|---|---|---|")
     for f in sorted(deps.dynamic_libs, key=lambda x: x.name):
-        ok = "✓" if f.is_from_rpm else "✗ unknown"
-        W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_hash[:16] or '—'}` | {ok} |")
+        ok = "✓" if is_from_rpm(f) else "✗ unknown"
+        W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
 
     # Artifacts
     W("\n## Build Artifacts\n")
@@ -459,7 +374,7 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
         if f.name in seen:
             continue
         seen.add(f.name)
-        W(f"| `{f.name}` | `{f.git_hash[:20] or '—'}` |")
+        W(f"| `{f.name}` | `{f.git_blob_sha1[:20] or '—'}` |")
 
     if upstream:
         W("\n## Upstream Verification\n")
@@ -507,13 +422,13 @@ def make_json(deps: BuildDeps, pkg_name: str) -> dict:
             result.append({
                 "path":       f.abspath,
                 "name":       f.name,
-                "sha1_git":   f.git_hash,
+                "sha1_git":   f.git_blob_sha1,
                 "rpm_name":   f.rpm_name,
                 "rpm_nevra":  f.rpm_nevra,
                 "dep_type":   f.dep_type,
-                "role":       f.role,
-                "verified":   f.is_from_rpm,
-                "vendored":   f.is_vendored,
+                "role":       file_role(f.abspath),
+                "verified":   is_from_rpm(f),
+                "vendored":   is_vendored(f),
             })
         return result
 
@@ -530,66 +445,6 @@ def make_json(deps: BuildDeps, pkg_name: str) -> dict:
     }
 
 # ── Upstream verification ─────────────────────────────────────────────────────
-
-@dataclass
-class UpstreamSpec:
-    url: str                     # bare clone URL
-    # Paths relative to repo root that identify this component.
-    # If empty, use all .c/.h files found under the vendor dir.
-    key_files: list[str] = field(default_factory=list)
-    max_commits: int = 300       # history depth to scan
-
-
-# Database of known vendored components → upstream git repos.
-# Key matches the last component of the vendor directory path.
-UPSTREAM_DB: dict[str, UpstreamSpec] = {
-    "wslay": UpstreamSpec(
-        "https://github.com/tatsuhiro-t/wslay.git",
-        key_files=[
-            "lib/wslay_event.c", "lib/wslay_frame.c",
-            "lib/wslay_net.c",   "lib/wslay_queue.c",
-            "lib/wslay_event.h", "lib/wslay_frame.h",
-            "lib/wslay_net.h",   "lib/wslay_queue.h",
-            "lib/includes/wslay/wslay.h",
-        ],
-    ),
-    "zlib": UpstreamSpec(
-        "https://github.com/madler/zlib.git",
-        key_files=["inflate.c", "deflate.c", "zlib.h", "crc32.c", "adler32.c"],
-    ),
-    "lua": UpstreamSpec(
-        "https://github.com/lua/lua.git",
-        key_files=["ldo.c", "lvm.c", "lua.h", "lstate.c", "lobject.h"],
-        max_commits=500,
-    ),
-    "luafilesystem": UpstreamSpec(
-        "https://github.com/lunarmodules/luafilesystem.git",
-        key_files=["src/lfs.c", "src/lfs.h"],
-    ),
-    "duktape": UpstreamSpec(
-        "https://github.com/svaarala/duktape.git",
-        key_files=["src/duktape.c", "src/duktape.h", "src/duk_config.h"],
-        max_commits=100,
-    ),
-    "expat": UpstreamSpec(
-        "https://github.com/libexpat/libexpat.git",
-        key_files=[
-            "expat/lib/xmlparse.c", "expat/lib/xmltok.c",
-            "expat/lib/expat.h",
-        ],
-    ),
-    "libutp": UpstreamSpec(
-        "https://github.com/bittorrent/libutp.git",
-        key_files=["utp.cpp", "utp.h", "utp_internal.cpp"],
-    ),
-    "civetweb": UpstreamSpec(
-        "https://github.com/civetweb/civetweb.git",
-        key_files=["src/civetweb.c", "include/civetweb.h"],
-        max_commits=100,
-    ),
-    # sqlite and lua are very large — skip auto-clone, use --cache-dir with pre-cloned repo
-}
-
 
 @dataclass
 class UpstreamMatch:
@@ -684,7 +539,7 @@ def _map_build_path(abspath: str, vendor_dir_name: str) -> Optional[str]:
 def verify_vendored(
     vendor_dir: str,
     vendor_files: list["FileNode"],
-    spec: UpstreamSpec,
+    spec: Component,
     cache_dir: Path,
 ) -> Optional[UpstreamMatch]:
     """
@@ -695,19 +550,19 @@ def verify_vendored(
     dir_name = vendor_dir.split("/")[-1]  # e.g. "wslay" from "deps/wslay"
 
     # Build {upstream_path: git_blob_hash} from build-recorder data
-    if spec.key_files:
+    if spec.upstream_key_files:
         target: dict[str, str] = {}
         for f in vendor_files:
             rel = _map_build_path(f.abspath, dir_name)
-            if rel and f.git_hash and rel in spec.key_files:
-                target[rel] = f.git_hash
+            if rel and f.git_blob_sha1 and rel in spec.upstream_key_files:
+                target[rel] = f.git_blob_sha1
     else:
-        # No key_files specified → use all .c/.h files
+        # No upstream_key_files specified → use all .c/.h files
         target = {}
         for f in vendor_files:
             rel = _map_build_path(f.abspath, dir_name)
-            if rel and f.git_hash and Path(rel).suffix in (".c", ".h", ".cpp", ".hpp"):
-                target[rel] = f.git_hash
+            if rel and f.git_blob_sha1 and Path(rel).suffix in (".c", ".h", ".cpp", ".hpp"):
+                target[rel] = f.git_blob_sha1
 
     if not target:
         print(f"    no comparable files found in {vendor_dir}")
@@ -716,7 +571,7 @@ def verify_vendored(
     print(f"    comparing {len(target)} files against upstream ...", end=" ", flush=True)
 
     try:
-        git_dir = _ensure_clone(spec.url, cache_dir)
+        git_dir = _ensure_clone(spec.upstream_url, cache_dir)
     except subprocess.CalledProcessError as e:
         print(f"clone failed: {e}")
         return None
@@ -724,7 +579,7 @@ def verify_vendored(
     # Get all commits newest-first
     log = _git(git_dir,
                "log", "--all", "--format=%H %ai %s",
-               check=False).splitlines()[:spec.max_commits]
+               check=False).splitlines()[:spec.upstream_max_commits]
 
     tags = _tag_map(git_dir)
 
@@ -744,7 +599,7 @@ def verify_vendored(
         if matched > best_score:
             best_score = matched
             best_match = UpstreamMatch(
-                repo_url=spec.url,
+                repo_url=spec.upstream_url,
                 commit=commit_sha,
                 date=date,
                 message=message[:80],
@@ -793,29 +648,19 @@ def collect_vendored_groups(
     Group vendored source files by their vendor directory.
     Returns {vendor_dir_name: (vendor_dir_path, [FileNode, ...])}
     """
-    VENDOR_PARTS = {
-        "third_party", "thirdparty", "3rdparty",
-        "vendor", "vendors", "external", "externals", "extern",
-        "deps", "dependencies", "contrib", "bundled", "embedded",
-    }
     groups: dict[str, tuple[str, list["FileNode"]]] = {}
 
     all_vendored = [f for f in deps.static_sources + deps.static_headers
-                    if f.is_vendored]
+                    if is_vendored(f)]
     # Also include vendored archives
-    all_vendored += [f for f in deps.static_archives if f.is_vendored]
+    all_vendored += [f for f in deps.static_archives if is_vendored(f)]
 
     for f in all_vendored:
-        parts = f.abspath.replace("\\", "/").split("/")
-        vendor_dir = None
-        for i, p in enumerate(parts):
-            if p in VENDOR_PARTS and i + 1 < len(parts):
-                vendor_dir = "/".join(parts[i:i + 2])
-                break
-        if vendor_dir:
-            dir_name = vendor_dir.split("/")[-1]
+        vdir = vendor_dir_of(f.abspath)
+        if vdir:
+            dir_name = vdir.split("/")[-1]
             if dir_name not in groups:
-                groups[dir_name] = (vendor_dir, [])
+                groups[dir_name] = (vdir, [])
             groups[dir_name][1].append(f)
 
     return groups
@@ -830,9 +675,9 @@ def run_upstream_verification(
     results: dict[str, Optional[UpstreamMatch]] = {}
 
     for dir_name, (vendor_dir, files) in groups.items():
-        spec = UPSTREAM_DB.get(dir_name)
+        spec = upstream_for(dir_name)
         if spec is None:
-            print(f"  {dir_name}: no upstream database entry, skipping")
+            print(f"  {dir_name}: no upstream repository on record, skipping")
             results[dir_name] = None
             continue
 
@@ -896,11 +741,12 @@ def main():
     pkg_name  = out_path.stem.replace("-build", "")
 
     print(f"Parsing {out_path.name} ...", end=" ", flush=True)
-    files, procs = parse_graph(out_path)
-    print(f"{len(files)} files, {len(procs)} processes")
+    graph = parse_out(out_path)
+    files = graph.files
+    print(f"{len(files)} files, {len(graph.procs)} processes")
 
     print("Analysing dependency graph ...", end=" ", flush=True)
-    deps = analyze(files, procs)
+    deps = analyze(graph)
     n_static = len(deps.static_headers) + len(deps.static_sources) + len(deps.static_archives)
     print(f"{n_static} static, {len(deps.dynamic_libs)} dynamic, "
           f"{len(deps.artifacts)} artifacts")

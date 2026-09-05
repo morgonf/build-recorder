@@ -1,26 +1,9 @@
 """T0.2 acceptance tests — brec/model.py parse_out()."""
 
 import json
-import sys
 from pathlib import Path
 
-import pytest
-
-from brec.ir import BuildGraph, FileNode, ProcessNode
 from brec.model import parse_out
-
-# sbom.py lives in the repo root; pyproject.toml adds "." to pythonpath
-import sbom as _sbom
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _file_triples(graph: BuildGraph) -> set[tuple]:
-    """(uri, abspath, git_blob_sha1) for every FileNode."""
-    return {
-        (fn.uri, fn.abspath, fn.git_blob_sha1)
-        for fn in graph.files.values()
-    }
 
 
 # ── Golden test: tiny.out ─────────────────────────────────────────────────────
@@ -78,19 +61,6 @@ def test_golden_role_is_none(tiny_out: Path) -> None:
     graph = parse_out(tiny_out)
     for pn in graph.procs.values():
         assert pn.role is None
-
-
-# ── Equivalence with sbom.parse_file_records() ────────────────────────────────
-
-def test_equivalence_with_sbom_parse_file_records(tiny_out: Path) -> None:
-    """(uri, abspath, git_blob_sha1) sets must be identical for both parsers."""
-    new_graph = parse_out(tiny_out)
-    old_records = _sbom.parse_file_records(tiny_out)
-
-    new_set = {(fn.uri, fn.abspath, fn.git_blob_sha1) for fn in new_graph.files.values()}
-    old_set = {(fr.uri, fr.abspath, fr.git_hash)      for fr in old_records}
-
-    assert new_set == old_set
 
 
 # ── Flat format ───────────────────────────────────────────────────────────────
@@ -223,6 +193,34 @@ def test_escaped_cmd_unescaped(escaped_paths_out: Path) -> None:
     p0 = graph.procs[":p0"]
     # The raw cmd contains \" sequences that should be unescaped to "
     assert '"' in p0.cmd
+
+
+# ── Unescaping ────────────────────────────────────────────────────────────────
+
+def test_carriage_return_unescaped(tmp_path: Path) -> None:
+    """The tracer writes \\r (record_triple() in src/record.c); parsing must undo it."""
+    out = tmp_path / "cr.out"
+    out.write_text(
+        ":f0 a b:file .\n"
+        ':f0 b:abspath "/tmp/we\\rird.c" .\n',
+        encoding="utf-8",
+    )
+    assert parse_out(out).files[":f0"].abspath == "/tmp/we\rird.c"
+
+
+def test_escaped_backslash_does_not_start_a_new_escape(tmp_path: Path) -> None:
+    r"""``\\n`` is a backslash followed by "n", not a newline.
+
+    Unescaping by chained replaces turned it into a newline: ``\\`` became a
+    single backslash first, and the next pass read the result as ``\n``.
+    """
+    out = tmp_path / "bs.out"
+    out.write_text(
+        ":f0 a b:file .\n"
+        ':f0 b:abspath "/tmp/dir\\\\name.c" .\n',
+        encoding="utf-8",
+    )
+    assert parse_out(out).files[":f0"].abspath == "/tmp/dir\\name.c"
 
 
 # ── Idempotency ───────────────────────────────────────────────────────────────

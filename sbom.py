@@ -24,7 +24,6 @@ See: doc/sbom-vendored-deps.md for full design documentation.
 import argparse
 import hashlib
 import json
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -35,163 +34,16 @@ from pathlib import Path
 from typing import Optional
 
 from brec.classify import is_vendor_path, vendor_dir
-from brec.model import parse_out as _brec_parse_out
-
-# ── Known component database ──────────────────────────────────────────────────
-
-@dataclass
-class ComponentSpec:
-    display_name: str
-    file_triggers: set = field(default_factory=set)
-    dir_re: Optional[re.Pattern] = None
-    version_re: Optional[re.Pattern] = None
-    version_transform: Optional[object] = None  # callable(str) -> str
-    osv_ecosystem: str = ""
-    osv_name: str = ""
-    purl_type: str = "generic"
-    purl_ns: str = ""
-    purl_name: str = ""
-    homepage: str = ""
-
-
-def _duk_version(v: str) -> str:
-    n = int(v)
-    return f"{n // 10000}.{(n % 10000) // 100}.{n % 100}"
-
-
-KNOWN_COMPONENTS: dict[str, ComponentSpec] = {
-    "luafilesystem": ComponentSpec(
-        display_name="LuaFileSystem",
-        file_triggers={"lfs.c", "lfs.h"},
-        version_re=re.compile(r'#\s*define\s+LFS_VERSION\s+"([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="lunarmodules/luafilesystem",
-        purl_type="github", purl_ns="lunarmodules", purl_name="luafilesystem",
-        homepage="https://github.com/lunarmodules/luafilesystem",
-    ),
-    "sqlite": ComponentSpec(
-        display_name="SQLite",
-        file_triggers={"sqlite3.c", "sqlite3.h"},
-        dir_re=re.compile(r"sqlite[3-]?[-_](\d[\d.]*)"),
-        version_re=re.compile(r'#\s*define\s+SQLITE_VERSION\s+"([^"]+)"'),
-        # OSV lacks a reliable ecosystem for upstream SQLite; query via binary scan
-        # with cve-bin-tool instead: cve-bin-tool libcivetweb.so
-        osv_ecosystem="",
-        osv_name="",
-        purl_type="generic", purl_ns="", purl_name="sqlite",
-        homepage="https://sqlite.org",
-    ),
-    "lua": ComponentSpec(
-        display_name="Lua",
-        file_triggers={"lua.h", "lualib.h", "lauxlib.h"},
-        dir_re=re.compile(r"lua[-_](\d+\.\d+[\.\d]*)"),
-        version_re=re.compile(r'#\s*define\s+LUA_RELEASE\s+"Lua ([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="lua/lua",
-        purl_type="github", purl_ns="lua", purl_name="lua",
-        homepage="https://www.lua.org",
-    ),
-    "duktape": ComponentSpec(
-        display_name="Duktape",
-        file_triggers={"duktape.c", "duktape.h", "duk_config.h"},
-        dir_re=re.compile(r"duktape[-_](\d+\.\d+[\.\d]*)"),
-        version_re=re.compile(r'#\s*define\s+DUK_VERSION\s+(\d+)'),
-        version_transform=_duk_version,
-        osv_ecosystem="GitHub",
-        osv_name="svaarala/duktape",
-        purl_type="github", purl_ns="svaarala", purl_name="duktape",
-        homepage="https://duktape.org",
-    ),
-    "lsqlite3": ComponentSpec(
-        display_name="lsqlite3",
-        file_triggers={"lsqlite3.c"},
-        version_re=re.compile(r'VERSION\s*=\s*"([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="LuaDist/lsqlite3",
-        purl_type="github", purl_ns="LuaDist", purl_name="lsqlite3",
-        homepage="https://github.com/LuaDist/lsqlite3",
-    ),
-    "luaxml": ComponentSpec(
-        display_name="LuaXML",
-        file_triggers={"LuaXML_lib.c", "LuaXML_lib.h", "LuaXML.lua"},
-        osv_ecosystem="GitHub",
-        osv_name="LuaDist/luaxml",
-        purl_type="github", purl_ns="LuaDist", purl_name="luaxml",
-        homepage="https://github.com/LuaDist/luaxml",
-    ),
-    "lua_struct": ComponentSpec(
-        display_name="lua-struct",
-        file_triggers={"lua_struct.c"},
-        osv_ecosystem="GitHub",
-        osv_name="iamclint/lua-struct",
-        purl_type="github", purl_ns="iamclint", purl_name="lua-struct",
-    ),
-    "expat": ComponentSpec(
-        display_name="Expat",
-        file_triggers={"expat.h", "xmlparse.c", "xmltok.c"},
-        dir_re=re.compile(r"expat[-_](\d+\.\d+[\.\d]*)"),
-        version_re=re.compile(r'#\s*define\s+XML_MAJOR_VERSION\s+(\d+)'),
-        osv_ecosystem="GitHub",
-        osv_name="libexpat/libexpat",
-        purl_type="github", purl_ns="libexpat", purl_name="libexpat",
-    ),
-    "zlib": ComponentSpec(
-        display_name="zlib",
-        file_triggers={"zlib.h", "inflate.c", "deflate.c"},
-        dir_re=re.compile(r"zlib[-_](\d+\.\d+[\.\d]*)"),
-        version_re=re.compile(r'#\s*define\s+ZLIB_VERSION\s+"([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="madler/zlib",
-        purl_type="github", purl_ns="madler", purl_name="zlib",
-    ),
-    "libpng": ComponentSpec(
-        display_name="libpng",
-        file_triggers={"png.h", "png.c", "pngconf.h"},
-        version_re=re.compile(r'#\s*define\s+PNG_LIBPNG_VER_STRING\s+"([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="pnggroup/libpng",
-        purl_type="github", purl_ns="pnggroup", purl_name="libpng",
-    ),
-    "cjson": ComponentSpec(
-        display_name="cJSON",
-        file_triggers={"cJSON.c", "cJSON.h"},
-        version_re=re.compile(r'#\s*define\s+CJSON_VERSION_MAJOR\s+(\d+)'),
-        osv_ecosystem="GitHub",
-        osv_name="DaveGamble/cJSON",
-        purl_type="github", purl_ns="DaveGamble", purl_name="cJSON",
-    ),
-    "jsmn": ComponentSpec(
-        display_name="jsmn",
-        file_triggers={"jsmn.c", "jsmn.h"},
-        osv_ecosystem="GitHub",
-        osv_name="zserge/jsmn",
-        purl_type="github", purl_ns="zserge", purl_name="jsmn",
-    ),
-    "mbedtls": ComponentSpec(
-        display_name="Mbed TLS",
-        file_triggers={"ssl.h", "aes.h", "sha256.c"},
-        dir_re=re.compile(r"mbedtls[-_](\d+\.\d+[\.\d]*)"),
-        version_re=re.compile(r'#\s*define\s+MBEDTLS_VERSION_STRING\s+"([^"]+)"'),
-        osv_ecosystem="GitHub",
-        osv_name="Mbed-TLS/mbedtls",
-        purl_type="github", purl_ns="Mbed-TLS", purl_name="mbedtls",
-    ),
-}
+from brec.components import COMPONENTS, Component, match_by_dirname, match_by_filename
+from brec.ir import FileNode
+from brec.model import parse_out
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
 @dataclass
-class FileRecord:
-    uri: str
-    abspath: str
-    git_hash: str
-    dep_type: str
-
-
-@dataclass
 class VendoredComponent:
     key: str
-    spec: ComponentSpec
+    spec: Component
     version: Optional[str]
     version_method: str          # "dir_name" | "version_string" | "osv_api" | "unknown"
     version_confidence: float    # 0.0 – 1.0
@@ -215,46 +67,13 @@ class VendoredComponent:
     def bom_ref(self) -> str:
         return f"{self.key}-{self.version or 'unknown'}"
 
-# ── Parser: read enriched .out file ──────────────────────────────────────────
-
-def parse_file_records(out_file: Path) -> list[FileRecord]:
-    """Extract all file nodes from .out via brec.model.parse_out()."""
-    graph = _brec_parse_out(out_file)
-    result = []
-    for fn in graph.files.values():
-        if fn.abspath:
-            result.append(FileRecord(
-                uri=fn.uri,
-                abspath=fn.abspath,
-                git_hash=fn.git_blob_sha1,
-                dep_type=fn.dep_type,
-            ))
-    return result
-
 # ── Layer 1: path-based component detection ───────────────────────────────────
 
-def _match_component_by_file(filename: str) -> Optional[str]:
-    for key, spec in KNOWN_COMPONENTS.items():
-        if filename in spec.file_triggers:
-            return key
-    return None
-
-
-def _version_from_dir(dirname: str) -> Optional[tuple[str, str]]:
-    """Try all dir_re patterns, return (component_key, version) or None."""
-    for key, spec in KNOWN_COMPONENTS.items():
-        if spec.dir_re:
-            m = spec.dir_re.search(dirname)
-            if m:
-                return key, m.group(1)
-    return None
-
-
-def detect_vendored_components(records: list[FileRecord]) -> list[VendoredComponent]:
+def detect_vendored_components(records: list[FileNode]) -> list[VendoredComponent]:
     vendor_files = [r for r in records if r.dep_type == "project_source" and is_vendor_path(r.abspath)]
 
     # Group by (component_key, vendor_dir) — multiple versions of same lib may coexist
-    bucket: dict[tuple[str, str], list[FileRecord]] = defaultdict(list)
+    bucket: dict[tuple[str, str], list[FileNode]] = defaultdict(list)
     bucket_meta: dict[tuple[str, str], tuple[Optional[str], str, float]] = {}  # → (version, method, conf)
 
     for rec in vendor_files:
@@ -262,8 +81,8 @@ def detect_vendored_components(records: list[FileRecord]) -> list[VendoredCompon
         dirname = vdir.split("/")[-1]
         fname = Path(rec.abspath).name
 
-        comp_key = _match_component_by_file(fname)
-        dir_match = _version_from_dir(dirname)
+        comp_key = match_by_filename(fname)
+        dir_match = match_by_dirname(dirname)
 
         if not comp_key and dir_match:
             comp_key = dir_match[0]
@@ -280,7 +99,7 @@ def detect_vendored_components(records: list[FileRecord]) -> list[VendoredCompon
 
     # For each component key, pick the vendor_dir with the most compiled files
     # (heuristic: the most-referenced version was actually built)
-    best: dict[str, tuple[str, list[FileRecord]]] = {}
+    best: dict[str, tuple[str, list[FileNode]]] = {}
     for (comp_key, vdir), files in bucket.items():
         if comp_key not in best or len(files) > len(best[comp_key][1]):
             best[comp_key] = (vdir, files)
@@ -290,7 +109,7 @@ def detect_vendored_components(records: list[FileRecord]) -> list[VendoredCompon
         version, method, conf = bucket_meta[(comp_key, vdir)]
         components[comp_key] = VendoredComponent(
             key=comp_key,
-            spec=KNOWN_COMPONENTS[comp_key],
+            spec=COMPONENTS[comp_key],
             version=version,
             version_method=method,
             version_confidence=conf,
@@ -660,7 +479,7 @@ def main():
     source_dir = Path(args.source_dir) if args.source_dir else None
 
     print(f"Parsing {out_file.name} ...", end=" ", flush=True)
-    records = parse_file_records(out_file)
+    records = list(parse_out(out_file).files.values())
     print(f"{len(records)} file records")
 
     print("Detecting vendored components (Layer 1: path patterns) ...", end=" ", flush=True)

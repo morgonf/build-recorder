@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import sbom
+from brec.model import parse_out
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -30,29 +31,30 @@ def _normalize(text: str) -> str:
     return text
 
 
-# ── Adapter correctness ───────────────────────────────────────────────────────
+# ── The file nodes the SBOM is built from ─────────────────────────────────────
+#
+# sbom.py used to copy each file node into a FileRecord of its own; it now reads
+# brec.ir.FileNode straight from the graph.  These tests state what the SBOM
+# needs from a node: path, hash, and the dep_type that marks project source.
 
-def test_parse_file_records_count(tiny_out: Path) -> None:
-    """Adapter returns one FileRecord per file node (3 in tiny.out)."""
-    records = sbom.parse_file_records(tiny_out)
-    assert len(records) == 3
+def test_file_nodes_count(tiny_out: Path) -> None:
+    assert len(parse_out(tiny_out).files) == 3
 
 
-def test_parse_file_records_abspath(tiny_out: Path) -> None:
-    abspaths = {r.abspath for r in sbom.parse_file_records(tiny_out)}
+def test_file_nodes_abspath(tiny_out: Path) -> None:
+    abspaths = {f.abspath for f in parse_out(tiny_out).files.values()}
     assert "/home/user/project/hello.c" in abspaths
 
 
-def test_parse_file_records_git_hash(tiny_out: Path) -> None:
-    records = sbom.parse_file_records(tiny_out)
-    by_path = {r.abspath: r for r in records}
-    assert by_path["/home/user/project/hello.c"].git_hash == (
+def test_file_nodes_git_hash(tiny_out: Path) -> None:
+    by_path = {f.abspath: f for f in parse_out(tiny_out).files.values()}
+    assert by_path["/home/user/project/hello.c"].git_blob_sha1 == (
         "aabbcc0000000000000000000000000000000001"
     )
 
 
-def test_parse_file_records_dep_type_enriched(tmp_path: Path) -> None:
-    """Adapter correctly passes dep_type from an enriched .out file."""
+def test_file_nodes_dep_type_enriched(tmp_path: Path) -> None:
+    """dep_type from an enriched .out reaches the component detector."""
     out = tmp_path / "enriched.out"
     out.write_text(
         "@prefix : <http://build-recorder.org/data#> .\n"
@@ -64,7 +66,7 @@ def test_parse_file_records_dep_type_enriched(tmp_path: Path) -> None:
         ':f0 b:dep_type "project_source" .\n',
         encoding="utf-8",
     )
-    records = sbom.parse_file_records(out)
+    records = list(parse_out(out).files.values())
     assert len(records) == 1
     assert records[0].dep_type == "project_source"
     assert records[0].abspath == "/project/third_party/sqlite3.c"
@@ -74,7 +76,7 @@ def test_parse_file_records_dep_type_enriched(tmp_path: Path) -> None:
 
 def test_sbom_json_golden(tiny_out: Path) -> None:
     """CycloneDX SBOM JSON output is byte-identical to the pre-refactor baseline."""
-    records = sbom.parse_file_records(tiny_out)
+    records = list(parse_out(tiny_out).files.values())
     components = sbom.detect_vendored_components(records)
     produced = json.dumps(
         sbom.generate_cyclonedx(components, tiny_out),
@@ -89,7 +91,7 @@ def test_sbom_json_golden(tiny_out: Path) -> None:
 
 def test_sbom_report_golden(tiny_out: Path) -> None:
     """Markdown SBOM report is identical to the pre-refactor baseline."""
-    records = sbom.parse_file_records(tiny_out)
+    records = list(parse_out(tiny_out).files.values())
     components = sbom.detect_vendored_components(records)
     produced = sbom.generate_report(components, tiny_out)
     golden = (GOLDEN_DIR / "tiny_sbom_report.md").read_text(encoding="utf-8")

@@ -618,11 +618,11 @@ brec analyze BUILD.out [опции]
 |---|---|
 | `enrich.py` (RPM-атрибуция) | `brec/provenance/rpm.py` + `brec/classify.py` |
 | `sbom.py` парсер | `brec/model.py` |
-| `sbom.py` `KNOWN_COMPONENTS` | `brec/identify/cache.py` + `data/components.d/` |
+| `sbom.py` `KNOWN_COMPONENTS` | `brec/components.py` (сделано; стадия `identify` снята) |
 | `sbom.py` CycloneDX | `brec/report/cyclonedx.py` |
 | `sbom.py` OSV-слои | `brec/identify/osv.py` + `brec/vuln/osv_query.py` |
 | `verify-build.py` парсер | `brec/model.py` |
 | `verify-build.py` классификация | `brec/classify.py` |
-| `verify-build.py` `UPSTREAM_DB` | `brec/identify/cache.py` + `data/components.d/` |
+| `verify-build.py` `UPSTREAM_DB` | `brec/components.py`, слит с `KNOWN_COMPONENTS` (сделано) |
 | `verify-build.py` commit-walk | `brec/identify/gitwalk.py` |
 | `build-report.py` SPARQL | поверх `brec/model.py` (или сохранить) |

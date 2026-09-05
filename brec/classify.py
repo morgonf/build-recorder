@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from brec.ir import BuildGraph, ClassifiedFile, DepClass, FileNode, PackageRef
+from brec.ir import BuildGraph, ClassifiedFile, DepClass, PackageRef
 
 if TYPE_CHECKING:
     from brec.provenance.base import ProvenanceBackend
@@ -78,42 +78,18 @@ _TEMP_RE = re.compile(
 )
 
 _HEADER_EXTS: frozenset[str] = frozenset({".h", ".hpp", ".hh", ".h++"})
-_SOURCE_EXTS: frozenset[str] = frozenset({
-    ".c", ".cpp", ".cc", ".cxx", ".c++", ".s", ".S", ".asm",
-})
+_C_SOURCE_EXTS: frozenset[str] = frozenset({".c", ".cpp", ".cc", ".cxx", ".c++"})
+_ASSEMBLY_EXTS: frozenset[str] = frozenset({".s", ".asm"})
+
+# What a compiler may be handed as a translation unit: C-family or assembly.
+# ".S" is kept for the case-sensitive comparison in _dep_class_for().
+_SOURCE_EXTS: frozenset[str] = _C_SOURCE_EXTS | _ASSEMBLY_EXTS | {".S"}
 
 # Suffixes of files that are build *outputs*.  Deliberately excludes ".d":
 # a make dependency file is bookkeeping about the build, not a product of it.
 _ARTIFACT_EXTS: frozenset[str] = frozenset({
     ".so", ".a", ".la", ".dll", ".dylib", ".ko",
 })
-
-
-def _proc_role(exe_abspath: str) -> str:
-    name = Path(exe_abspath).name
-    if name in COMPILER_NAMES:
-        return "compiler"
-    if name in LINKER_NAMES:
-        return "linker"
-    if name in ASSEMBLER_NAMES:
-        return "assembler"
-    if name in ARCHIVER_NAMES:
-        return "archiver"
-    return "other"
-
-
-def _is_vendor_path(abspath: str) -> bool:
-    parts = abspath.lower().replace("\\", "/").split("/")
-    return any(p in VENDOR_DIRS for p in parts)
-
-
-def _extract_vendor_dir(abspath: str) -> Optional[str]:
-    """Return 'vendor_segment/next_component', e.g. 'third_party/sqlite'."""
-    parts = abspath.replace("\\", "/").split("/")
-    for i, p in enumerate(parts):
-        if p.lower() in VENDOR_DIRS and i + 1 < len(parts):
-            return f"{parts[i]}/{parts[i + 1]}"
-    return None
 
 
 def _dep_class_for(
@@ -145,32 +121,32 @@ def _dep_class_for(
             return DepClass.PROJECT, None
         if package is not None:
             return DepClass.SYSTEM_DYNAMIC, None
-        if _is_vendor_path(abspath):
-            return DepClass.VENDORED, _extract_vendor_dir(abspath)
+        if is_vendor_path(abspath):
+            return DepClass.VENDORED, vendor_dir(abspath)
         return DepClass.UNKNOWN, None
 
     # ── Static archive ───────────────────────────────────────────────────────
     if is_archive:
         if package is not None:
             return DepClass.SYSTEM_STATIC, None
-        if _is_vendor_path(abspath):
-            return DepClass.VENDORED, _extract_vendor_dir(abspath)
+        if is_vendor_path(abspath):
+            return DepClass.VENDORED, vendor_dir(abspath)
         return DepClass.PROJECT, None
 
     # ── Header read by compiler/assembler ────────────────────────────────────
     if is_header and has_compiler:
         if package is not None:
             return DepClass.SYSTEM_STATIC, None
-        if _is_vendor_path(abspath):
-            return DepClass.VENDORED, _extract_vendor_dir(abspath)
+        if is_vendor_path(abspath):
+            return DepClass.VENDORED, vendor_dir(abspath)
         return DepClass.PROJECT, None
 
     # ── Source file read by compiler/assembler ───────────────────────────────
     if is_source and has_compiler:
         if package is not None:
             return DepClass.SYSTEM_STATIC, None
-        if _is_vendor_path(abspath):
-            return DepClass.VENDORED, _extract_vendor_dir(abspath)
+        if is_vendor_path(abspath):
+            return DepClass.VENDORED, vendor_dir(abspath)
         return DepClass.PROJECT, None
 
     # ── Executable / build tool (has OS package, in a tool directory) ────────
@@ -180,8 +156,8 @@ def _dep_class_for(
                 return DepClass.SYSTEM_STATIC, None
 
     # ── Vendor path without OS package ───────────────────────────────────────
-    if package is None and _is_vendor_path(abspath):
-        return DepClass.VENDORED, _extract_vendor_dir(abspath)
+    if package is None and is_vendor_path(abspath):
+        return DepClass.VENDORED, vendor_dir(abspath)
 
     # ── Any remaining system file with a package ─────────────────────────────
     if package is not None:
@@ -193,20 +169,26 @@ def _dep_class_for(
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def process_role(exe_abspath: str) -> str:
-    """Return the role string for a process identified by its executable path.
+    """Return the role of the process running *exe_abspath*.
 
     Roles: ``compiler | linker | assembler | archiver | other``.
-
-    This is a thin public wrapper around the internal :func:`_proc_role` helper,
-    exposed so that external scripts (e.g. ``verify-build.py``) can classify
-    processes without importing the private helper directly.
     """
-    return _proc_role(exe_abspath)
+    name = Path(exe_abspath).name
+    if name in COMPILER_NAMES:
+        return "compiler"
+    if name in LINKER_NAMES:
+        return "linker"
+    if name in ASSEMBLER_NAMES:
+        return "assembler"
+    if name in ARCHIVER_NAMES:
+        return "archiver"
+    return "other"
 
 
 def is_vendor_path(abspath: str) -> bool:
     """True when *abspath* lies inside a vendor / third-party directory."""
-    return _is_vendor_path(abspath)
+    parts = abspath.lower().replace("\\", "/").split("/")
+    return any(p in VENDOR_DIRS for p in parts)
 
 
 def vendor_dir(abspath: str) -> Optional[str]:
@@ -215,7 +197,37 @@ def vendor_dir(abspath: str) -> Optional[str]:
     ``None`` means either that the path is not vendored at all, or that the
     vendor segment is the final component and no component name follows it.
     """
-    return _extract_vendor_dir(abspath)
+    parts = abspath.replace("\\", "/").split("/")
+    for i, p in enumerate(parts):
+        if p.lower() in VENDOR_DIRS and i + 1 < len(parts):
+            return f"{parts[i]}/{parts[i + 1]}"
+    return None
+
+
+def file_role(abspath: str) -> str:
+    """Return what kind of file *abspath* is, judged by its name alone.
+
+    Roles: ``dynamic_lib | static_archive | header | source | object |
+    assembly | other``.  This is the extension-level question ("what is this
+    file?"), kept apart from :func:`dep_type_from_path`, which also weighs
+    package ownership, and from :func:`classify_files`, which weighs who read
+    the file.  ``verify-build.py`` sorts its report by this role.
+    """
+    name = Path(abspath).name.lower()
+    if ".so." in name or name.endswith(".so"):
+        return "dynamic_lib"
+    if name.endswith(".a"):
+        return "static_archive"
+    suffix = Path(name).suffix
+    if suffix in _HEADER_EXTS:
+        return "header"
+    if suffix in _C_SOURCE_EXTS:
+        return "source"
+    if suffix == ".o":
+        return "object"
+    if suffix in _ASSEMBLY_EXTS:
+        return "assembly"
+    return "other"
 
 
 def is_build_artifact(abspath: str) -> bool:
@@ -290,7 +302,7 @@ def classify_roles(graph: BuildGraph) -> None:
         exe_abspath = ""
         if proc.executable and proc.executable in graph.files:
             exe_abspath = graph.files[proc.executable].abspath
-        proc.role = _proc_role(exe_abspath)
+        proc.role = process_role(exe_abspath)
 
 
 def classify_files(
@@ -342,14 +354,15 @@ def classify_files(
                     package = ref
                     break
 
-        dep_class, vendor_dir = _dep_class_for(
+        # Not "vendor_dir": that name is a module-level function here.
+        dep_class, vdir = _dep_class_for(
             fnode.abspath, furi, roles, package, written_uris
         )
         result.append(ClassifiedFile(
             file=fnode,
             dep_class=dep_class,
             package=package,
-            vendor_dir=vendor_dir,
+            vendor_dir=vdir,
             read_by_roles=set(roles),
         ))
 

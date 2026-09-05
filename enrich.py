@@ -28,72 +28,20 @@ enrich.py — добавляет трипли о пакетном происхо
 """
 
 import argparse
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 from brec.classify import dep_type_from_path
+from brec.model import parse_out
 from brec.provenance.rpm import RpmBackend
 
 MARKER = "# --- package provenance triples (added by enrich.py) ---\n"
 
 
-def _unescape(s: str) -> str:
-    return (
-        s.replace('\\"', '"')
-        .replace("\\\\", "\\")
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-        .replace("\\r", "\r")
-    )
-
-
 def parse_file_abspaths(out_file: Path) -> dict[str, str]:
-    """
-    Scans the .out file line-by-line to extract {uri: abspath} for all b:file nodes.
-    Handles two formats:
-      - Flat (new): each triple on its own line, subject repeated
-          :f0  a  b:file .
-          :f0  b:abspath  "/path" .
-      - Grouped (old): semicolon-separated predicate blocks
-          :f0 a b:file ;
-              b:abspath "/path" ;
-              ...
-    """
-    file_uris: set[str] = set()
-    abspaths: dict[str, str] = {}
-    current_uri: str | None = None
-
-    file_re       = re.compile(r"^(:[a-zA-Z_]\w*)\s+a\s+b:file\b")
-    abs_direct_re = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
-    abs_indent_re = re.compile(r"^\s+b:abspath\s+\"((?:[^\"\\]|\\.)*)\"")
-
-    with open(out_file, "r", encoding="utf-8", errors="replace") as fh:
-        for raw in fh:
-            line = raw.rstrip("\n")
-
-            m = file_re.match(line)
-            if m:
-                file_uris.add(m.group(1))
-                current_uri = m.group(1)
-                continue
-
-            m = abs_direct_re.match(line)
-            if m:
-                abspaths[m.group(1)] = _unescape(m.group(2))
-                current_uri = None
-                continue
-
-            if current_uri:
-                m = abs_indent_re.match(line)
-                if m:
-                    abspaths[current_uri] = _unescape(m.group(1))
-                    continue
-                if line and not line[0].isspace() and not line.startswith("#"):
-                    current_uri = None
-
-    return {uri: path for uri, path in abspaths.items() if uri in file_uris}
+    """Return ``{file_uri: abspath}`` for every file node in *out_file*."""
+    return {uri: fn.abspath for uri, fn in parse_out(out_file).files.items()}
 
 
 def is_already_enriched(out_file: Path) -> bool:

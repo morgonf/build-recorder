@@ -51,15 +51,25 @@ _PROC_STR  = frozenset({"cmd", "start", "end"})
 _PROC_LINK = frozenset({"creates", "execs", "reads", "writes", "rename", "executable"})
 
 
-# ── Unescape helper (same logic as enrich.py / verify-build.py) ──────────────
+# ── Unescape helper ───────────────────────────────────────────────────────────
+
+# The escapes the tracer writes (see record_triple() in src/record.c), plus \t,
+# which Turtle allows and other producers of the format may emit.
+_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t"}
+
+_ESC_RE = re.compile(r"\\(.)")
+
 
 def _unescape(s: str) -> str:
-    return (
-        s.replace('\\"', '"')
-         .replace("\\\\", "\\")
-         .replace("\\n", "\n")
-         .replace("\\t", "\t")
-    )
+    """Undo Turtle string escaping in a single left-to-right pass.
+
+    Chained ``str.replace`` calls cannot do this: unescaping ``\\\\`` first turns
+    the literal backslash-then-n of ``\\\\n`` into ``\\n``, which the next
+    replace then reads as a newline.  One pass consumes each backslash together
+    with the character it escapes, so an escaped backslash cannot re-enter the
+    scan.  An unknown escape yields the character itself.
+    """
+    return _ESC_RE.sub(lambda m: _ESCAPES.get(m.group(1), m.group(1)), s)
 
 
 # ── Parser ────────────────────────────────────────────────────────────────────
