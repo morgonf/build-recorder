@@ -231,6 +231,24 @@ def test_same_shape_at_a_path_the_build_never_wrote_stays_red(tmp_path):
     assert finding.foreign_leaves == ["/opt/vendor/libthing.a"]
 
 
+def test_writes_to_dev_null_are_not_produced_files(tmp_path):
+    """A build that only wrote to /dev/null produced nothing to judge."""
+    out = tmp_path / "devnull.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fnull", "/dev/null", "null")
+        + _file(":fproc", "/proc/self/oom_score_adj", "oom_score_adj")
+        + ":pconf a b:process .\n:pconf b:writes :fnull .\n"
+        + ":ptune a b:process .\n:ptune b:writes :fproc .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    assert rep.produced == 0
+    assert rep.findings == []
+    assert rep.verdict == "GREEN"
+
+
 def test_clean_build_is_green(out_file, tmp_path):
     # Keep only the clean cc1 -> ld -> app chain.
     clean = "\n".join(

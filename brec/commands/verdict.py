@@ -56,7 +56,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from brec.classify import is_build_artifact
+from brec.classify import is_build_artifact, is_pseudo_file
 from brec.commands.common import add_provenance_option, load_graph
 from brec.ir import BuildGraph, FileNode
 from brec.provenance.base import ProvenanceBackend
@@ -377,6 +377,11 @@ def compute_verdict(
     writer_procs: dict[str, list] = {}
     for p in procs.values():
         for w in p.writes:
+            node = files.get(w)
+            if node is not None and is_pseudo_file(node.abspath):
+                # Writing to /dev/null, /proc or /sys produces no file, so
+                # there is nothing here to have a lineage or a verdict.
+                continue
             writer_procs.setdefault(w, []).append(p)
 
     # Processes that used a mechanism able to move file content past the tracer.

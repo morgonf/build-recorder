@@ -77,6 +77,26 @@ _TEMP_RE = re.compile(
     r"|CMakeFiles/|TryCompile|CMakeTmp)"
 )
 
+# Kernel interfaces a build writes to without producing anything: /dev/null
+# swallows output, /proc and /sys are settings.  They are not files a build
+# makes, and counting them as artifacts wrecked the numbers that matter: of the
+# 846 "artifacts" in the zlib ground-truth build, 489 were /dev/null, one node
+# per open, each of them then reported as an output of unknown lineage.
+#
+# /dev/shm is deliberately not here: it is ordinary writable storage, and a
+# prebuilt staged there is exactly the kind of thing this tool must still see.
+_PSEUDO_WRITE_RE = re.compile(
+    r"^(/dev/(null|zero|full|random|urandom|tty[0-9]*|console|ptmx"
+    r"|std(in|out|err)|fd/[0-9]+|pts/[0-9]+)$"
+    r"|/proc/|/sys/)"
+)
+
+
+def is_pseudo_file(abspath: str) -> bool:
+    """True for a path where writing produces no file: /dev/null, /proc, /sys."""
+    return bool(_PSEUDO_WRITE_RE.match(abspath))
+
+
 _HEADER_EXTS: frozenset[str] = frozenset({".h", ".hpp", ".hh", ".h++"})
 _C_SOURCE_EXTS: frozenset[str] = frozenset({".c", ".cpp", ".cc", ".cxx", ".c++"})
 _ASSEMBLY_EXTS: frozenset[str] = frozenset({".s", ".asm"})
@@ -249,6 +269,8 @@ def is_build_artifact(abspath: str) -> bool:
       an artifact everywhere now.
     """
     if _TEMP_RE.search(abspath):
+        return False
+    if is_pseudo_file(abspath):
         return False
     name = Path(abspath).name
     if Path(name).suffix.lower() in _ARTIFACT_EXTS:

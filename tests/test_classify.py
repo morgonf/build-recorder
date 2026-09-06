@@ -21,6 +21,7 @@ from brec.classify import (
     classify_roles,
     file_role,
     is_build_artifact,
+    is_pseudo_file,
     is_vendor_path,
     vendor_dir,
 )
@@ -635,6 +636,26 @@ def test_is_build_artifact_is_the_only_definition() -> None:
     assert pv.is_build_artifact is is_build_artifact
     assert not hasattr(vb, "_is_real_artifact")
     assert not hasattr(pv, "is_real_artifact")
+
+
+def test_pseudo_files_are_not_artifacts() -> None:
+    """Writing to /dev/null produces nothing, so it is not an output.
+
+    It has no extension, so the bare-executable rule used to make an artifact
+    of every node the tracer created for it: 489 of the 846 "artifacts" in the
+    zlib ground-truth build were /dev/null.
+    """
+    assert is_build_artifact("/dev/null") is False
+    assert is_build_artifact("/dev/stdout") is False
+    assert is_build_artifact("/dev/pts/3") is False
+    assert is_build_artifact("/proc/self/oom_score_adj") is False
+    assert is_build_artifact("/sys/kernel/mm/transparent_hugepage/enabled") is False
+
+
+def test_dev_shm_is_ordinary_storage() -> None:
+    """A prebuilt staged in /dev/shm is still a prebuilt: it must stay visible."""
+    assert is_pseudo_file("/dev/shm/libfoo.a") is False
+    assert is_build_artifact("/dev/shm/libfoo.a") is True
 
 
 # ── is_vendor_path / vendor_dir ───────────────────────────────────────────────
