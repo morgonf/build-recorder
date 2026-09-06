@@ -131,6 +131,57 @@ def test_findings_for_one_path_keep_graph_order(tmp_path):
     assert [f.foreign_leaves for f in tied] == [["/opt/pre/a.a"], ["/opt/pre/b.a"]]
 
 
+def test_lineage_survives_a_cycle(tmp_path):
+    """A file on its own lineage must not hide what the cycle read.
+
+    Cargo and Go builds do this constantly: a file is written, read back and
+    written again, so its lineage passes through itself.  Walking recursively
+    and stopping at the second visit answered per walk-path rather than per
+    file, and the cached answer then depended on the order files were walked
+    in.  Here the prebuilt archive is reachable only through the cycle: if the
+    walk truncates, the artifact comes out GREEN and the prebuilt is missed.
+    """
+    out = tmp_path / "cycle.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fpre", "/opt/pre/libvendor.a", "libvendor.a")
+        + _file(":fa", "/home/u/proj/build/a.o", "a.o")
+        + _file(":fb", "/home/u/proj/build/b.o", "b.o")
+        + _file(":fapp", "/home/u/proj/build/app", "app")
+        # a.o and b.o each read the other: a two-file cycle
+        + ":pa a b:process .\n:pa b:reads :fb .\n:pa b:reads :fpre .\n:pa b:writes :fa .\n"
+        + ":pb a b:process .\n:pb b:reads :fa .\n:pb b:writes :fb .\n"
+        # the shipped artifact is produced from one side of the cycle only
+        + ":pld a b:process .\n:pld b:reads :fb .\n:pld b:writes :fapp .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    by_art = {f.artifact: f for f in rep.findings}
+    assert by_art["/home/u/proj/build/app"].verdict == "RED"
+    assert "/opt/pre/libvendor.a" in by_art["/home/u/proj/build/app"].foreign_leaves
+
+
+def test_cycle_lineage_does_not_depend_on_where_the_walk_starts(tmp_path):
+    """Every file in a cycle gets the same lineage, so order cannot change it."""
+    out = tmp_path / "cycle2.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fsrc", "/home/u/proj/main.c", "main.c")
+        + _file(":fa", "/home/u/proj/build/a.o", "a.o")
+        + _file(":fb", "/home/u/proj/build/b.o", "b.o")
+        + ":pa a b:process .\n:pa b:reads :fb .\n:pa b:reads :fsrc .\n:pa b:writes :fa .\n"
+        + ":pb a b:process .\n:pb b:reads :fa .\n:pb b:writes :fb .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    # Neither is GREY: the source both of them ultimately come from is visible
+    # from either end of the cycle.
+    assert rep.grey == 0
+    assert rep.green == 2
+
+
 def test_clean_build_is_green(out_file, tmp_path):
     # Keep only the clean cc1 -> ld -> app chain.
     clean = "\n".join(

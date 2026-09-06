@@ -277,6 +277,87 @@ class Report:
         }
 
 
+def _condense(
+    nodes: set[str],
+    inputs: dict[str, set[str]],
+    direct: dict[str, set[str]],
+) -> tuple[dict[str, int], list[set[str]]]:
+    """Contract cycles, then collect each component's terminal inputs.
+
+    Strongly connected components of the produced-file graph (Tarjan, iterative
+    so a deep build tree cannot overflow the stack).  Tarjan closes a component
+    only after every component it points to, so a component's leaves are its
+    members' own terminal inputs plus the leaves of the components they reach,
+    all of them already computed.
+
+    Returns ``(component of each node, leaves of each component)``.
+    """
+    comp_of: dict[str, int] = {}
+    comp_leaves: list[set[str]] = []
+
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    counter = 0
+
+    for root in nodes:
+        if root in index:
+            continue
+        index[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        work: list[tuple[str, object]] = [(root, iter(inputs.get(root, ())))]
+
+        while work:
+            node, it = work[-1]
+            descended = False
+            for nxt in it:                       # type: ignore[union-attr]
+                if nxt not in index:
+                    index[nxt] = low[nxt] = counter
+                    counter += 1
+                    stack.append(nxt)
+                    on_stack.add(nxt)
+                    work.append((nxt, iter(inputs.get(nxt, ()))))
+                    descended = True
+                    break
+                if nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+            if descended:
+                continue
+
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+
+            if low[node] != index[node]:
+                continue
+
+            members: list[str] = []
+            while True:
+                member = stack.pop()
+                on_stack.discard(member)
+                members.append(member)
+                if member == node:
+                    break
+
+            cid = len(comp_leaves)
+            collected: set[str] = set()
+            for member in members:
+                comp_of[member] = cid
+                collected |= direct.get(member, set())
+            for member in members:
+                for nxt in inputs.get(member, ()):
+                    other = comp_of.get(nxt)
+                    if other is not None and other != cid:
+                        collected |= comp_leaves[other]
+            comp_leaves.append(collected)
+
+    return comp_of, comp_leaves
+
+
 def compute_verdict(
     graph: BuildGraph,
     copies: list[Copy],
@@ -326,7 +407,7 @@ def compute_verdict(
         return ok
 
     def is_foreign_binary(furi: str) -> bool:
-        """A pre-existing binary leaf with no OS package — a prebuilt not built here."""
+        """A pre-existing binary leaf with no OS package: a prebuilt not built here."""
         if furi in produced:
             return False
         fn = files.get(furi)
@@ -334,28 +415,46 @@ def compute_verdict(
             return False
         return is_binary(fn.abspath) and not has_package(furi)
 
-    # Terminal input leaves feeding a produced file's content.
-    _leaf_cache: dict[str, set[str]] = {}
+    # ── Terminal input leaves feeding a produced file's content ──────────────
+    #
+    # Each produced file's inputs split in two: the ones this build also
+    # produced, which are edges to follow, and the terminal ones, which are the
+    # leaves being looked for.
+    #
+    # The build graph has cycles: a file written, read and written again is on
+    # its own lineage.  Following the edges recursively and stopping at the
+    # second visit answers per walk-path, not per file, and caching that answer
+    # hands it to every later caller, so the verdict depended on the order the
+    # files were walked in.  On the fd build that moved the GREY count between
+    # 192 and 197 across runs of the same trace.  Contracting each cycle into a
+    # single node removes the question: whatever a cycle reads is lineage for
+    # every file in it, whichever way the walk enters.
 
-    def leaves(furi: str, seen: frozenset[str]) -> set[str]:
-        if furi in _leaf_cache:
-            return _leaf_cache[furi]
-        if furi in seen:
-            return set()
-        seen = seen | {furi}
-        result: set[str] = set()
+    inputs: dict[str, set[str]] = {}     # produced -> produced (edges)
+    direct: dict[str, set[str]] = {}     # produced -> terminal inputs (leaves)
+    for furi in produced:
+        ins: set[str] = set()
+        lvs: set[str] = set()
         if furi in copy_src:                      # content is the copy source
             src = copy_src[furi]
-            result = leaves(src, seen) if src in produced else {src}
+            (ins if src in produced else lvs).add(src)
         elif furi in writer_procs:                # produced by a process
             for p in writer_procs[furi]:
                 for r in p.reads:
+                    # A file that reads itself is its own earlier content, not
+                    # an edge to follow; it stays a leaf, as it always was.
                     if r in produced and r != furi:
-                        result |= leaves(r, seen)
+                        ins.add(r)
                     else:
-                        result.add(r)
-        _leaf_cache[furi] = result
-        return result
+                        lvs.add(r)
+        inputs[furi] = ins
+        direct[furi] = lvs
+
+    comp_of, comp_leaves = _condense(produced, inputs, direct)
+
+    def leaves(furi: str) -> set[str]:
+        cid = comp_of.get(furi)
+        return comp_leaves[cid] if cid is not None else set()
 
     findings: list[Finding] = []
     verdict_by_uri: dict[str, str] = {}
@@ -371,7 +470,7 @@ def compute_verdict(
         real_art = is_build_artifact(fn.abspath)
         if real_art:
             real += 1
-        ls = leaves(furi, frozenset())
+        ls = leaves(furi)
         foreign = sorted(
             files[l].abspath for l in ls if is_foreign_binary(l)
         )
