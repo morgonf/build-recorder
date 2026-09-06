@@ -387,11 +387,23 @@ handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 	return;
     }
 
-    FILE_INFO *from = finfo + (ptrdiff_t) pi->entry_info;
+    ptrdiff_t from_index = (ptrdiff_t) pi->entry_info;
 
     char *abspath = absolutepath(pid, newdirfd, newpath);
 
+    if (abspath == NULL) {
+	// The destination does not resolve to a real name; skip the event
+	// rather than record a triple with no object, as at open(2).
+	free(newpath);
+	return;
+    }
+
+    // next_finfo() can grow the array, which moves it: resolve both entries
+    // afterwards. Holding a FILE_INFO* across the call read freed memory, and
+    // killed the trace outright on an %install stage that renames enough files
+    // to trigger the growth (zlib: `mv` of libz.so.* into /lib64).
     FILE_INFO *to = next_finfo();
+    FILE_INFO *from = finfo + from_index;
 
     finfo_new(to, newpath, abspath, from->hash);
     record_file(to->outname, newpath, abspath);
@@ -413,11 +425,18 @@ handle_link_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 	return;
     }
 
-    FILE_INFO *from = finfo + (ptrdiff_t) pi->entry_info;
+    ptrdiff_t from_index = (ptrdiff_t) pi->entry_info;
 
     char *abspath = absolutepath(pid, newdirfd, newpath);
 
+    if (abspath == NULL) {
+	free(newpath);
+	return;
+    }
+
+    // Same ordering rule as in handle_rename_exit(): the array may move.
     FILE_INFO *to = next_finfo();
+    FILE_INFO *from = finfo + from_index;
 
     finfo_new(to, newpath, abspath, from->hash);
     record_file(to->outname, newpath, abspath);
