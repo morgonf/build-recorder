@@ -1,0 +1,50 @@
+{
+  "payload": {
+    "backends": [
+      "rpm"
+    ],
+    "env_dump": "enrich_rpm_dump.txt",
+    "files": {
+      ":f1": {
+        "abspath": "/usr/include/stdio.h",
+        "dep_type": "static_header",
+        "pkg_backend": "rpm",
+        "pkg_name": "glibc-devel",
+        "pkg_version": "glibc-devel-2.33-alt1.x86_64",
+        "purl": "pkg:rpm/glibc-devel@glibc-devel-2.33-alt1.x86_64"
+      },
+      ":f2": {
+        "abspath": "/usr/lib64/libc.so.6",
+        "dep_type": "dynamic_lib",
+        "pkg_backend": "rpm",
+        "pkg_name": "glibc",
+        "pkg_version": "glibc-2.33-alt1.x86_64",
+        "purl": "pkg:rpm/glibc@glibc-2.33-alt1.x86_64"
+      },
+      ":f3": {
+        "abspath": "/home/user/project/main.c",
+        "dep_type": "project_source"
+      },
+      ":f4": {
+        "abspath": "/usr/lib64/libz.a",
+        "dep_type": "static_archive",
+        "pkg_backend": "rpm",
+        "pkg_name": "zlib-devel-static",
+        "pkg_version": "zlib-devel-static-1.2.11-alt1.x86_64",
+        "purl": "pkg:rpm/zlib-devel-static@zlib-devel-static-1.2.11-alt1.x86_64"
+      },
+      ":f5": {
+        "abspath": "/usr/bin/gcc",
+        "dep_type": "build_tool",
+        "pkg_backend": "rpm",
+        "pkg_name": "gcc",
+        "pkg_version": "gcc-12.2.1-alt1.x86_64",
+        "purl": "pkg:rpm/gcc@gcc-12.2.1-alt1.x86_64"
+      }
+    },
+    "trace_files": 5
+  },
+  "schema_version": 1,
+  "source_out": "enrich_test.out",
+  "stage": "provenance"
+}

@@ -42,8 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from brec.commands.common import add_provenance_option, load_graph as _load_graph
 from brec.ir import BuildGraph, FileNode, ProcessNode
-from brec.model import parse_out
 
 # ── Вспомогательные данные ────────────────────────────────────────────────────
 
@@ -100,8 +100,8 @@ PKG_ROLE = {
 
 # ── Загрузка графа ────────────────────────────────────────────────────────────
 
-def load_graph(path: Path) -> BuildGraph:
-    return parse_out(path)
+def load_graph(path: Path, provenance: Optional[Path] = None) -> BuildGraph:
+    return _load_graph(path, provenance, quiet=True)
 
 
 # ── Вопросы к графу ───────────────────────────────────────────────────────────
@@ -606,6 +606,7 @@ AVAILABLE = {
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("file", help="Путь к .out файлу build-recorder")
+    add_provenance_option(ap)
     ap.add_argument(
         "--query", "-q",
         default="all",
@@ -631,7 +632,7 @@ def run(args) -> int:
 
     print(f"Загрузка {path.name} ...", end=" ", flush=True)
     t0 = time.time()
-    g = load_graph(path)
+    g = load_graph(path, args.provenance)
     print(f"{len(g.procs)} процессов, {len(g.files)} файлов "
           f"за {time.time() - t0:.1f}с")
 

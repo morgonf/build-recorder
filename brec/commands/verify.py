@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from brec.commands.common import add_provenance_option, load_graph
 from brec.classify import (
     classify_roles,
     file_role,
@@ -34,7 +35,6 @@ from brec.classify import (
 )
 from brec.components import Component, upstream_for
 from brec.ir import BuildGraph, FileNode
-from brec.model import parse_out
 
 # ── File predicates ───────────────────────────────────────────────────────────
 #
@@ -711,7 +711,8 @@ def _format_upstream_match(m: UpstreamMatch) -> list[str]:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("out_file", help="Enriched .out file (run `brec enrich` first)")
+    ap.add_argument("out_file", help="build-recorder .out (run `brec enrich` for package attribution)")
+    add_provenance_option(ap)
     ap.add_argument("--report", "-r", metavar="FILE.md",
                     help="Save Markdown report (default: <out>.verify.md)")
     ap.add_argument("--json", "-j", metavar="FILE.json",
@@ -736,7 +737,7 @@ def run(args) -> int:
     pkg_name  = out_path.stem.replace("-build", "")
 
     print(f"Parsing {out_path.name} ...", end=" ", flush=True)
-    graph = parse_out(out_path)
+    graph = load_graph(out_path, args.provenance)
     files = graph.files
     print(f"{len(files)} files, {len(graph.procs)} processes")
 

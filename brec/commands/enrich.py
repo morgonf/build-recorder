@@ -1,29 +1,35 @@
 """
-brec enrich — добавляет трипли о пакетном происхождении файлов в .out файл build-recorder.
+brec enrich: приписывает файлам трассы пакет-владельца, не трогая трассу.
 
 Использование:
     brec enrich <build.out> <rpm-dump.txt>
+    brec enrich <build.out> <rpm-dump.txt> -o where/to/put.provenance.json
     brec enrich <build.out> <rpm-dump.txt> --dry-run
 
 Входные данные:
-    <build.out>    — RDF Turtle, вывод build-recorder
-    <rpm-dump.txt> — таблица "путь<TAB>rpm_name<TAB>nevra", экспортированная из контейнера:
+    <build.out>     RDF Turtle, вывод build-recorder
+    <rpm-dump.txt>  таблица "путь<TAB>rpm_name<TAB>nevra", экспортированная из контейнера:
                      rpm -qa --qf '[%{FILENAMES}\\t%{NAME}\\t%{NEVRA}\\n]'
 
-Добавляет в <build.out> тройки:
-    b:rpm_package — NEVRA пакета (NAME-VERSION-RELEASE.ARCH)
-    b:rpm_name    — имя пакета без версии
-    b:dep_type    — роль файла: static_header | dynamic_lib | static_archive |
-                                build_tool | project_source | system_runtime | unknown
+Результат: sidecar рядом с трассой (`<build>.provenance.json`), по записи на
+каждый файловый узел:
+
+    pkg_backend, pkg_name, pkg_version, purl: пакет, которому принадлежит файл
+    dep_type: роль файла (static_header | dynamic_lib | static_archive |
+              build_tool | project_source | system_runtime)
+
+Раньше эти данные дописывались тройками в сам .out. Так делать нельзя: трасса
+после этого не то, что записал трассировщик, и по ней уже не отличить
+наблюдение от более позднего вывода по чужой пакетной базе. Остальные
+подкоманды подхватывают sidecar рядом с трассой сами.
 
 Типы зависимостей:
-    project_source  — файл НЕ из RPM-пакета (исходник проекта)
-    static_header   — .h/.hpp/.hh из пакета (компилируется статически)
-    dynamic_lib     — .so из пакета (динамическая линковка)
-    static_archive  — .a из пакета (статическая линковка)
-    build_tool      — исполняемый файл в /usr/bin, /bin и т.д. (инструмент сборки)
-    system_runtime  — прочие файлы из пакета
-    unknown         — не удалось определить
+    project_source  файл НЕ из RPM-пакета (исходник проекта)
+    static_header   .h/.hpp/.hh из пакета (компилируется статически)
+    dynamic_lib     .so из пакета (динамическая линковка)
+    static_archive  .a из пакета (статическая линковка)
+    build_tool      исполняемый файл в /usr/bin, /bin и т.д. (инструмент сборки)
+    system_runtime  прочие файлы из пакета
 """
 
 import argparse
@@ -31,18 +37,13 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from brec.classify import dep_type_from_path
 from brec.model import parse_out
+from brec.provenance import sidecar
 from brec.provenance.rpm import RpmBackend
 
-# The literal text written into every enriched .out since the first version:
-# renaming it would make already-enriched traces look unenriched.
+# Текст, которым старая версия помечала вписанный в .out блок. Пишущего кода
+# больше нет, но узнавать такие трассы надо: их данные и sidecar могут спорить.
 MARKER = "# --- package provenance triples (added by enrich.py) ---\n"
-
-
-def parse_file_abspaths(out_file: Path) -> dict[str, str]:
-    """Return ``{file_uri: abspath}`` for every file node in *out_file*."""
-    return {uri: fn.abspath for uri, fn in parse_out(out_file).files.items()}
 
 
 def is_already_enriched(out_file: Path) -> bool:
@@ -53,66 +54,37 @@ def is_already_enriched(out_file: Path) -> bool:
     return False
 
 
-def escape_ttl(s: str) -> str:
-    return (
-        s.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-    )
-
-
-def build_triples(
-    uri_to_abspath: dict[str, str],
-    rpm_backend: RpmBackend,
-) -> list[str]:
-    blocks: list[str] = []
-    for uri, abspath in sorted(uri_to_abspath.items()):
-        pkg_ref = rpm_backend.lookup(abspath, "") if rpm_backend.available() else None
-        dep_type = dep_type_from_path(abspath, pkg_ref is not None)
-
-        parts: list[str] = []
-        if pkg_ref:
-            parts.append(f'    b:rpm_name "{escape_ttl(pkg_ref.name)}" ;')
-            parts.append(f'    b:rpm_package "{escape_ttl(pkg_ref.version)}" ;')
-        parts.append(f'    b:dep_type "{dep_type}" .')
-
-        blocks.append(uri + "\n" + "\n".join(parts))
-
-    return blocks
-
-
-def print_stats(
-    uri_to_abspath: dict[str, str],
-    rpm_backend: RpmBackend,
-) -> None:
+def print_stats(doc) -> None:
     dep_counts: dict[str, int] = defaultdict(int)
     pkg_counts: dict[str, int] = defaultdict(int)
 
-    for abspath in uri_to_abspath.values():
-        pkg_ref = rpm_backend.lookup(abspath, "") if rpm_backend.available() else None
-        dep_type = dep_type_from_path(abspath, pkg_ref is not None)
-        dep_counts[dep_type] += 1
-        if pkg_ref:
-            pkg_counts[pkg_ref.name] += 1
+    for entry in doc.payload["files"].values():
+        dep_counts[entry["dep_type"]] += 1
+        name = entry.get("pkg_name")
+        if name:
+            pkg_counts[name] += 1
 
     print("\n=== Enrichment summary ===")
     print("Dependency types:")
-    for dt, n in sorted(dep_counts.items(), key=lambda x: -x[1]):
+    for dt, n in sorted(dep_counts.items(), key=lambda x: (-x[1], x[0])):
         print(f"  {dt:22s}: {n}")
 
     if pkg_counts:
         print("\nTop packages (by file count):")
-        for pkg, n in sorted(pkg_counts.items(), key=lambda x: -x[1])[:25]:
+        for pkg, n in sorted(pkg_counts.items(), key=lambda x: (-x[1], x[0]))[:25]:
             print(f"  {pkg:45s}: {n}")
+
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", help="Path to build-recorder .out (RDF Turtle)")
     ap.add_argument("rpm_dump", help="Path to rpm-dump.txt (path<TAB>name<TAB>nevra)")
     ap.add_argument(
+        "-o", "--output", metavar="FILE.provenance.json",
+        help="Where to write the sidecar (default: next to the trace)",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true",
-        help="Show stats but do not modify <out_file>",
+        help="Show stats but write nothing",
     )
 
 
@@ -129,11 +101,11 @@ def run(args) -> int:
 
     if is_already_enriched(out_file):
         print(
-            f"WARNING: {out_file} appears already enriched (marker found). "
-            "Remove the enrichment section manually before re-running.",
+            f"NOTE: {out_file} carries package triples written into it by an "
+            "older brec enrich. They are left alone; the sidecar is written "
+            "beside the trace and takes precedence where the two disagree.",
             file=sys.stderr,
         )
-        return 1
 
     print(f"Loading RPM dump from {rpm_dump} ...", end=" ", flush=True)
     backend = RpmBackend()
@@ -141,22 +113,18 @@ def run(args) -> int:
     print(f"{len(backend.index_as_dict())} file-package mappings")
 
     print(f"Scanning file nodes in {out_file} ...", end=" ", flush=True)
-    uri_to_abspath = parse_file_abspaths(out_file)
-    print(f"{len(uri_to_abspath)} file nodes")
+    graph = parse_out(out_file)
+    print(f"{len(graph.files)} file nodes")
 
-    print_stats(uri_to_abspath, backend)
+    doc = sidecar.build(graph, [backend], source_out=out_file, env_dump=rpm_dump)
+    print_stats(doc)
 
     if args.dry_run:
         print("\n[dry-run] No changes written.")
         return 0
 
-    triples = build_triples(uri_to_abspath, backend)
-    print(f"\nAppending {len(triples)} enriched file blocks to {out_file} ...")
-    with open(out_file, "a", encoding="utf-8") as fh:
-        fh.write("\n")
-        fh.write(MARKER)
-        fh.write("\n".join(triples))
-        fh.write("\n")
-
-    print("Done.")
+    target = Path(args.output) if args.output else sidecar.default_path(out_file)
+    doc.dump(target)
+    print(f"\nProvenance for {len(doc.payload['files'])} files → {target}")
+    print(f"The trace itself is unchanged: {out_file}")
     return 0

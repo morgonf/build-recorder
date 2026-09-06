@@ -106,7 +106,7 @@ C-файлов.
 ```
 build-recorder (.out)
        │
-   brec enrich             ← добавляет b:dep_type, b:rpm_name
+   brec enrich             ← пишет <build>.provenance.json рядом с трассой
        │
    brec sbom
     ├── Layer 1: path detection        (offline, всегда)
@@ -314,7 +314,7 @@ python3 -m brec report /output/pkg-build.out --query packages
 | Файл | Назначение |
 |---|---|
 | `brec/commands/sbom.py` | Реализация pipeline |
-| `brec/commands/enrich.py` | Добавление RPM-провенанса (предшествующий шаг) |
+| `brec/commands/enrich.py` | RPM-провенанс в sidecar (предшествующий шаг) |
 | `brec/commands/report.py` | SPARQL-анализ + `--query packages` |
 | `doc/sbom-vendored-deps.md` | Этот документ |
 | `doc/build-recorder-schema.ttl` | RDF-схема с `b:rpm_package`, `b:dep_type` |

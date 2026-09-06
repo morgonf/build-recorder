@@ -55,8 +55,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from brec.classify import is_build_artifact
+from brec.commands.common import add_provenance_option, load_graph
 from brec.ir import BuildGraph, FileNode
-from brec.model import parse_out
 from brec.provenance.base import ProvenanceBackend
 from brec.provenance.registry import detect_backends
 
@@ -597,7 +597,8 @@ def _format_report(rep: Report, out_path: str) -> str:
     return "\n".join(lines)
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("out_file", type=Path, help="build-recorder .out (enriched)")
+    ap.add_argument("out_file", type=Path, help="build-recorder .out")
+    add_provenance_option(ap)
     ap.add_argument("--rpm-dump", type=Path, default=None,
                     help="rpm file→package dump for OS-package attribution")
     ap.add_argument("--payload", type=Path, default=None,
@@ -616,7 +617,7 @@ def run(args) -> int:
         print(f"error: {args.payload} not found", file=sys.stderr)
         return 2
 
-    graph = parse_out(args.out_file)
+    graph = load_graph(args.out_file, args.provenance)
     copies = parse_copies(args.out_file)
     gaps = parse_coverage_gaps(args.out_file)
     backends = detect_backends(args.rpm_dump)

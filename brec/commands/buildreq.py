@@ -58,8 +58,8 @@ from pathlib import Path
 from typing import Optional
 
 from brec.buildreq import BuildReqReport, audit, parse_declared, parse_rpm_deps
+from brec.commands.common import add_provenance_option, load_graph
 from brec.ir import BuildGraph
-from brec.model import parse_out
 from brec.provenance.registry import detect_backends
 
 
@@ -155,6 +155,7 @@ def render(rep: BuildReqReport, max_files: int) -> str:
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", type=Path, help="build-recorder .out trace")
+    add_provenance_option(ap)
     ap.add_argument("--declared", type=Path, required=True,
                     help="declared capabilities, one per line (rpm -qp --requires)")
     ap.add_argument("--rpm-deps", type=Path,
@@ -179,7 +180,7 @@ def run(args) -> int:
             print(f"ERROR: file not found: {path}", file=sys.stderr)
             return 2
 
-    graph = parse_out(args.out_file)
+    graph = load_graph(args.out_file, args.provenance)
     declared = parse_declared(args.declared)
     provides, requires = parse_rpm_deps(args.rpm_deps) if args.rpm_deps else ({}, {})
     package_of, file_lookup = make_resolvers(graph, args.rpm_dump)

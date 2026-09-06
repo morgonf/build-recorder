@@ -33,9 +33,9 @@ from pathlib import Path
 from typing import Optional
 
 from brec.classify import is_vendor_path, vendor_dir
+from brec.commands.common import add_provenance_option, load_graph
 from brec.components import COMPONENTS, Component, match_by_dirname, match_by_filename
 from brec.ir import FileNode
-from brec.model import parse_out
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
@@ -450,7 +450,8 @@ def generate_report(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("out_file", help="Enriched build-recorder .out file (after `brec enrich`)")
+    ap.add_argument("out_file", help="build-recorder .out file")
+    add_provenance_option(ap)
     ap.add_argument("-o", "--output", metavar="sbom.json",
                     help="CycloneDX SBOM output path (default: <input>.sbom.json)")
     ap.add_argument("--report", metavar="report.md",
@@ -474,7 +475,7 @@ def run(args) -> int:
     source_dir = Path(args.source_dir) if args.source_dir else None
 
     print(f"Parsing {out_file.name} ...", end=" ", flush=True)
-    records = list(parse_out(out_file).files.values())
+    records = list(load_graph(out_file, args.provenance).files.values())
     print(f"{len(records)} file records")
 
     print("Detecting vendored components (Layer 1: path patterns) ...", end=" ", flush=True)

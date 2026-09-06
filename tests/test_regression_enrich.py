@@ -1,11 +1,12 @@
-"""T1.4 regression tests — `brec enrich` behavior-preserving refactor.
+"""Tests for `brec enrich`: package attribution derived beside the trace.
 
-Golden baseline: tests/golden/enrich_test.triples
-Captured BEFORE T1.4 changes by running the original enrich.build_triples()
-on tests/fixtures/enrich_test.out + tests/fixtures/enrich_rpm_dump.txt.
+Golden baseline: tests/golden/enrich_test.provenance.json, the sidecar for
+tests/fixtures/enrich_test.out + tests/fixtures/enrich_rpm_dump.txt.  It
+carries the same attribution the command used to append to the .out itself,
+which is what the per-dep_type tests below check entry by entry.
 
-Non-deterministic fields: none — build_triples output is fully deterministic
-(sorted by URI, fixed format).
+The invariant these tests exist for is the first one: the trace is evidence,
+and running enrich must leave it byte-for-byte as the tracer wrote it.
 """
 
 from __future__ import annotations
@@ -17,7 +18,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from brec.cli import main as cli_main
 from brec.commands import enrich
+from brec.model import parse_out
+from brec.provenance import sidecar
+from brec.provenance.rpm import RpmBackend
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -45,10 +50,11 @@ def test_enrich_uses_rpm_backend() -> None:
     assert "RpmBackend" in src, "RpmBackend not found in brec/commands/enrich.py"
 
 
-def test_enrich_uses_dep_type_from_path() -> None:
-    """`brec enrich` must import dep_type_from_path from brec.classify."""
-    src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "dep_type_from_path" in src, "dep_type_from_path not found in brec/commands/enrich.py"
+def test_dep_type_classification_is_not_reimplemented() -> None:
+    """The one definition lives in brec.classify; the sidecar builder calls it."""
+    src = (Path(__file__).parent.parent / "brec" / "provenance" /
+           "sidecar.py").read_text(encoding="utf-8")
+    assert "from brec.classify import dep_type_from_path" in src
 
 
 def test_enrich_has_no_tool_dirs_definition() -> None:
@@ -57,78 +63,109 @@ def test_enrich_has_no_tool_dirs_definition() -> None:
     assert "TOOL_DIRS = " not in src, "TOOL_DIRS still locally defined in brec/commands/enrich.py"
 
 
-# ── Golden: build_triples output is byte-identical to pre-T1.4 baseline ──────
+# ── The trace is evidence: enrich must not touch it ──────────────────────────
 
-def test_enrich_build_triples_golden() -> None:
-    """build_triples() with the enrich command produces byte-identical output."""
-    from brec.provenance.rpm import RpmBackend
+def test_run_leaves_the_trace_byte_for_byte(tmp_path: Path, capsys) -> None:
+    trace = tmp_path / "build.out"
+    trace.write_bytes((FIXTURES_DIR / "enrich_test.out").read_bytes())
+    before = trace.read_bytes()
 
-    out_file = FIXTURES_DIR / "enrich_test.out"
-    rpm_dump = FIXTURES_DIR / "enrich_rpm_dump.txt"
+    rc = cli_main(["enrich", str(trace), str(FIXTURES_DIR / "enrich_rpm_dump.txt")])
 
+    assert rc == 0
+    assert trace.read_bytes() == before
+    assert (tmp_path / "build.provenance.json").exists()
+
+
+def test_run_writes_the_sidecar_where_asked(tmp_path: Path) -> None:
+    trace = tmp_path / "build.out"
+    trace.write_bytes((FIXTURES_DIR / "enrich_test.out").read_bytes())
+    target = tmp_path / "elsewhere" / "p.json"
+    target.parent.mkdir()
+
+    rc = cli_main(["enrich", str(trace), str(FIXTURES_DIR / "enrich_rpm_dump.txt"),
+                   "-o", str(target)])
+
+    assert rc == 0
+    assert target.exists()
+    assert not (tmp_path / "build.provenance.json").exists()
+
+
+def test_dry_run_writes_nothing(tmp_path: Path) -> None:
+    trace = tmp_path / "build.out"
+    trace.write_bytes((FIXTURES_DIR / "enrich_test.out").read_bytes())
+
+    rc = cli_main(["enrich", str(trace), str(FIXTURES_DIR / "enrich_rpm_dump.txt"),
+                   "--dry-run"])
+
+    assert rc == 0
+    assert list(tmp_path.iterdir()) == [trace]
+
+
+# ── Golden: the sidecar for the fixture trace ────────────────────────────────
+
+def _sidecar_for(out_file: Path, rpm_dump: Path):
     backend = RpmBackend()
     backend.build_index(rpm_dump)
-    uri_to_abspath = enrich.parse_file_abspaths(out_file)
-    triples = enrich.build_triples(uri_to_abspath, backend)
+    return sidecar.build(parse_out(out_file), [backend], source_out=out_file,
+                         env_dump=rpm_dump)
 
-    golden = (GOLDEN_DIR / "enrich_test.triples").read_text(encoding="utf-8").rstrip("\n")
-    assert "\n".join(triples) == golden
+
+def test_sidecar_golden(tmp_path: Path) -> None:
+    doc = _sidecar_for(FIXTURES_DIR / "enrich_test.out",
+                       FIXTURES_DIR / "enrich_rpm_dump.txt")
+    # Paths of the inputs are environment-specific; the attribution is not.
+    doc.source_out = "enrich_test.out"
+    doc.payload["env_dump"] = "enrich_rpm_dump.txt"
+    written = tmp_path / "got.json"
+    doc.dump(written)
+
+    golden = GOLDEN_DIR / "enrich_test.provenance.json"
+    if not golden.exists():
+        golden.write_bytes(written.read_bytes())
+    assert written.read_text(encoding="utf-8") == golden.read_text(encoding="utf-8")
 
 
 # ── Per-dep_type correctness ──────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def enrich_triples():
-    from brec.provenance.rpm import RpmBackend
-    backend = RpmBackend()
-    backend.build_index(FIXTURES_DIR / "enrich_rpm_dump.txt")
-    uri_to_abspath = enrich.parse_file_abspaths(FIXTURES_DIR / "enrich_test.out")
-    return {uri: block for uri, block in zip(
-        sorted(uri_to_abspath.keys()),
-        enrich.build_triples(uri_to_abspath, backend)
-    )}
+def entries():
+    doc = _sidecar_for(FIXTURES_DIR / "enrich_test.out",
+                       FIXTURES_DIR / "enrich_rpm_dump.txt")
+    return doc.payload["files"]
 
 
-def test_enrich_static_header(enrich_triples) -> None:
-    block = enrich_triples[":f1"]
-    assert 'b:dep_type "static_header"' in block
-    assert 'b:rpm_name "glibc-devel"' in block
-    assert 'b:rpm_package "glibc-devel-2.33-alt1.x86_64"' in block
+def test_enrich_static_header(entries) -> None:
+    assert entries[":f1"]["dep_type"] == "static_header"
+    assert entries[":f1"]["pkg_name"] == "glibc-devel"
+    assert entries[":f1"]["pkg_version"] == "glibc-devel-2.33-alt1.x86_64"
+    assert entries[":f1"]["purl"] == "pkg:rpm/glibc-devel@glibc-devel-2.33-alt1.x86_64"
 
 
-def test_enrich_dynamic_lib(enrich_triples) -> None:
-    block = enrich_triples[":f2"]
-    assert 'b:dep_type "dynamic_lib"' in block
-    assert 'b:rpm_name "glibc"' in block
+def test_enrich_dynamic_lib(entries) -> None:
+    assert entries[":f2"]["dep_type"] == "dynamic_lib"
+    assert entries[":f2"]["pkg_name"] == "glibc"
 
 
-def test_enrich_project_source_no_rpm(enrich_triples) -> None:
-    block = enrich_triples[":f3"]
-    assert 'b:dep_type "project_source"' in block
-    assert "b:rpm_name" not in block
-    assert "b:rpm_package" not in block
+def test_enrich_project_source_no_rpm(entries) -> None:
+    assert entries[":f3"]["dep_type"] == "project_source"
+    assert "pkg_name" not in entries[":f3"]
+    assert "pkg_version" not in entries[":f3"]
 
 
-def test_enrich_static_archive(enrich_triples) -> None:
-    block = enrich_triples[":f4"]
-    assert 'b:dep_type "static_archive"' in block
-    assert 'b:rpm_name "zlib-devel-static"' in block
+def test_enrich_static_archive(entries) -> None:
+    assert entries[":f4"]["dep_type"] == "static_archive"
+    assert entries[":f4"]["pkg_name"] == "zlib-devel-static"
 
 
-def test_enrich_build_tool(enrich_triples) -> None:
-    block = enrich_triples[":f5"]
-    assert 'b:dep_type "build_tool"' in block
-    assert 'b:rpm_name "gcc"' in block
+def test_enrich_build_tool(entries) -> None:
+    assert entries[":f5"]["dep_type"] == "build_tool"
+    assert entries[":f5"]["pkg_name"] == "gcc"
 
 
-# ── Functional: parse_file_abspaths still works ───────────────────────────────
-
-def test_enrich_parse_file_abspaths() -> None:
-    result = enrich.parse_file_abspaths(FIXTURES_DIR / "enrich_test.out")
-    assert len(result) == 5
-    assert ":f1" in result
-    assert result[":f1"] == "/usr/include/stdio.h"
-    assert result[":f3"] == "/home/user/project/main.c"
+def test_every_file_node_gets_an_entry(entries) -> None:
+    """Including the ones no package owns: that is what makes them sources."""
+    assert set(entries) == {":f1", ":f2", ":f3", ":f4", ":f5"}
 
 
 def test_enrich_is_already_enriched_false(tmp_path: Path) -> None:
@@ -147,7 +184,7 @@ def test_enrich_is_already_enriched_true(tmp_path: Path) -> None:
 # ── Lib64 alias canonicalization via RpmBackend ────────────────────────────────
 
 def test_enrich_lib64_alias_via_rpm_backend(tmp_path: Path) -> None:
-    """build_triples finds /lib64/... paths via /usr/lib64/... RPM entry."""
+    """A /lib64/... path is attributed through the /usr/lib64/... RPM entry."""
     dump = tmp_path / "dump.txt"
     dump.write_text("/usr/lib64/libfoo.so.1\tlibfoo\tlibfoo-1.0-alt1.x86_64\n",
                     encoding="utf-8")
@@ -161,11 +198,6 @@ def test_enrich_lib64_alias_via_rpm_backend(tmp_path: Path) -> None:
         ':fa b:hash "aabbcc0000000000000000000000000000000001" .\n',
         encoding="utf-8",
     )
-    from brec.provenance.rpm import RpmBackend
-    backend = RpmBackend()
-    backend.build_index(dump)
-    uri_to_abspath = enrich.parse_file_abspaths(out)
-    triples = enrich.build_triples(uri_to_abspath, backend)
-    assert len(triples) == 1
-    assert 'b:dep_type "dynamic_lib"' in triples[0]
-    assert 'b:rpm_name "libfoo"' in triples[0]
+    entry = _sidecar_for(out, dump).payload["files"][":fa"]
+    assert entry["dep_type"] == "dynamic_lib"
+    assert entry["pkg_name"] == "libfoo"
