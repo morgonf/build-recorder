@@ -182,6 +182,55 @@ def test_cycle_lineage_does_not_depend_on_where_the_walk_starts(tmp_path):
     assert rep.green == 2
 
 
+def test_unattributed_content_at_a_written_path_is_grey_not_red(tmp_path):
+    """Content nobody was seen writing, at a path the build did write.
+
+    The tracer hashes a file opened for writing at close(), so when two threads
+    hold one path open, the hash recorded for one write is what the other left
+    and the intermediate state a reader saw belongs to no write node.  Go's
+    build cache does this on every build.  Such an orphan is not a prebuilt
+    from outside: the build was writing that path.  It is not clean either.
+    """
+    out = tmp_path / "orphan.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fsrc", "/home/u/proj/main.go", "main.go")
+        # two nodes for one cache path: one written here, one only ever read
+        + _file(":fcache1", "/tmp/go-build1/b010/_pkg_.a", "_pkg_.a")
+        + _file(":fcache2", "/tmp/go-build1/b010/_pkg_.a", "_pkg_.a")
+        + _file(":fbin", "/home/u/proj/bin/app", "app")
+        + ":pw a b:process .\n:pw b:reads :fsrc .\n:pw b:writes :fcache1 .\n"
+        + ":pld a b:process .\n:pld b:reads :fcache2 .\n:pld b:writes :fbin .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    finding = {f.artifact: f for f in rep.findings}["/home/u/proj/bin/app"]
+    assert finding.verdict == "GREY"
+    assert finding.unattributed_leaves == ["/tmp/go-build1/b010/_pkg_.a"]
+    assert finding.foreign_leaves == []
+    assert rep.red == 0
+
+
+def test_same_shape_at_a_path_the_build_never_wrote_stays_red(tmp_path):
+    """The softening is bounded by the path: an outside binary is still RED."""
+    out = tmp_path / "outside.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fsrc", "/home/u/proj/main.go", "main.go")
+        + _file(":fpre", "/opt/vendor/libthing.a", "libthing.a")
+        + _file(":fbin", "/home/u/proj/bin/app", "app")
+        + ":pld a b:process .\n:pld b:reads :fsrc .\n:pld b:reads :fpre .\n"
+        + ":pld b:writes :fbin .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    finding = {f.artifact: f for f in rep.findings}["/home/u/proj/bin/app"]
+    assert finding.verdict == "RED"
+    assert finding.foreign_leaves == ["/opt/vendor/libthing.a"]
+
+
 def test_clean_build_is_green(out_file, tmp_path):
     # Keep only the clean cc1 -> ld -> app chain.
     clean = "\n".join(

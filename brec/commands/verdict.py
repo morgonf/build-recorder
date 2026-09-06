@@ -11,12 +11,14 @@ through the observed process/file graph down to input leaves:
   GREEN  — lineage terminates only in source text and trusted inputs
            (OS-package files = toolchain/system; project source);
   RED    — incorporates a FOREIGN prebuilt binary: a .o/.a/.so/blob that was
-           not compiled from source in this build and is not provided by an OS
-           package (a phantom binary dependency), whether linked in or copied /
-           hardlinked straight into an output;
+           not compiled from source in this build, is not provided by an OS
+           package, and sits at a path this build never wrote (a phantom binary
+           dependency), whether linked in or copied / hardlinked into an output;
   GREY   — produced with no observable source lineage (content from a socket or
-           other unobserved channel, or a syscall-coverage gap) — the tool
-           cannot assert GREEN, and says so rather than guessing.
+           other unobserved channel, or a syscall-coverage gap), or built from
+           binary content that no observed write produced at a path this build
+           did write.  The tool cannot assert GREEN, and says so rather than
+           guessing either way.
 
 Package verdict = GREEN iff zero RED and zero GREY.
 
@@ -237,6 +239,7 @@ class Finding:
     verdict: str             # "RED" | "GREY"
     reason: str
     foreign_leaves: list[str] = field(default_factory=list)  # abspaths
+    unattributed_leaves: list[str] = field(default_factory=list)  # abspaths
 
 
 @dataclass
@@ -262,7 +265,8 @@ class Report:
             "fidelity": round(self.fidelity, 4),
             "findings": [
                 {"artifact": f.artifact, "verdict": f.verdict,
-                 "reason": f.reason, "foreign_leaves": f.foreign_leaves}
+                 "reason": f.reason, "foreign_leaves": f.foreign_leaves,
+                 "unattributed_leaves": f.unattributed_leaves}
                 for f in self.findings
             ],
             "coverage_gaps": [
@@ -406,14 +410,41 @@ def compute_verdict(
         _pkg_cache[furi] = ok
         return ok
 
-    def is_foreign_binary(furi: str) -> bool:
-        """A pre-existing binary leaf with no OS package: a prebuilt not built here."""
+    # Paths this build wrote at least once.  Content found at such a path is a
+    # different question from content found anywhere else: see
+    # is_unattributed_binary() below.
+    written_paths = {
+        files[u].abspath for u in writer_procs if u in files
+    }
+
+    def _unowned_binary(furi: str) -> bool:
         if furi in produced:
             return False
         fn = files.get(furi)
         if fn is None:
             return False
         return is_binary(fn.abspath) and not has_package(furi)
+
+    def is_foreign_binary(furi: str) -> bool:
+        """A pre-existing binary leaf with no OS package: a prebuilt not built here."""
+        if not _unowned_binary(furi):
+            return False
+        return files[furi].abspath not in written_paths
+
+    def is_unattributed_binary(furi: str) -> bool:
+        """Binary content at a path this build wrote, that no observed write produced.
+
+        The tracer hashes a file opened for writing at close(), not at the write
+        (src/tracer.c), so when two threads hold the same path open the hash
+        recorded for one write is the content the other left.  The intermediate
+        state a reader saw then belongs to no write node, and it is that orphan
+        node arriving here.  Calling it a prebuilt from outside would be wrong:
+        this build was writing that path.  Calling it source-clean would be a
+        guess.  It is the definition of GREY, and it is reported as such.
+        """
+        if not _unowned_binary(furi):
+            return False
+        return files[furi].abspath in written_paths
 
     # ── Terminal input leaves feeding a produced file's content ──────────────
     #
@@ -474,6 +505,9 @@ def compute_verdict(
         foreign = sorted(
             files[l].abspath for l in ls if is_foreign_binary(l)
         )
+        unattributed = sorted(
+            files[l].abspath for l in ls if is_unattributed_binary(l)
+        )
         written_through_gap = any(
             p.uri in gap_procs for p in writer_procs.get(furi, [])
         )
@@ -484,6 +518,15 @@ def compute_verdict(
                 artifact=fn.abspath, verdict="RED",
                 reason="incorporates prebuilt binary not built from source in this build",
                 foreign_leaves=foreign,
+            ))
+        elif unattributed:
+            grey += 1
+            verdict_by_uri[furi] = "GREY"
+            findings.append(Finding(
+                artifact=fn.abspath, verdict="GREY",
+                reason="incorporates binary content that no observed write "
+                       "produced, at a path this build did write",
+                unattributed_leaves=unattributed,
             ))
         elif written_through_gap:
             grey += 1
@@ -686,6 +729,8 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append(f"      {f.reason}")
         for leaf in f.foreign_leaves:
             lines.append(f"      ← prebuilt: {leaf}")
+        for leaf in f.unattributed_leaves:
+            lines.append(f"      ← unattributed: {leaf}")
 
     for e in rep.payload_entries:
         if e.status == "green":
