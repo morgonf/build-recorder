@@ -25,8 +25,20 @@ _STR_RE = re.compile(
 # Flat integer property:  :X b:prop 123 [.;]
 _INT_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+(\d+)\s*[.;]")
 
-# Flat URI relationship:  :X b:pred :Y [.;]
-_URI_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+(:[a-zA-Z_]\w*)\s*[.;]")
+# Flat URI relationship:  :X b:pred :Y [.;]  — the object may be a blank node,
+# which is how the tracer writes a rename (see _BNODE_RE below).
+_URI_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+((?::[a-zA-Z_]|_:)\w*)\s*[.;]")
+
+# The two ends of a rename, hung off a blank node:
+#     :p33 b:rename      _:rename0 .
+#     _:rename0 b:rename-from :f1561 .
+#     _:rename0 b:rename-to   :f1562 .
+# record_rename() in src/record.c has written renames this way from the start;
+# a pattern that only accepted ":X" objects saw the first line and dropped the
+# other two, so ProcessNode.renames came out empty on every real trace.
+_BNODE_RE = re.compile(
+    r"^(_:\w+)\s+b:(rename-from|rename-to)\s+(:[a-zA-Z_]\w*)\s*[.;]"
+)
 
 # Bare URI line (enrichment block header):  :X
 _BARE_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s*$")
@@ -38,7 +50,7 @@ _ISTR_RE = re.compile(r"^\s+b:(\w+)\s+\"((?:[^\"\\]|\\.)*)\"\s*[.;]?")
 _IINT_RE = re.compile(r"^\s+b:(\w+)\s+(\d+)\s*[.;]?")
 
 # Indented URI relationship:  WS b:pred :Y [.;]
-_IURI_RE = re.compile(r"^\s+b:(\w+)\s+(:[a-zA-Z_]\w*)\s*[.;]?")
+_IURI_RE = re.compile(r"^\s+b:(\w+)\s+((?::[a-zA-Z_]|_:)\w*)\s*[.;]?")
 
 # ── Predicates we store per node type ────────────────────────────────────────
 
@@ -85,8 +97,15 @@ def parse_out(path: Path) -> BuildGraph:
     ``role`` is left ``None``; it is populated by the CLASSIFY stage.
     """
     raw: dict[str, dict] = {}       # uri  →  mixed str/int/list values
-    file_uris: set[str] = set()
-    proc_uris: set[str] = set()
+    bnodes: dict[str, dict] = {}    # _:renameN  →  {"rename-from": uri, "rename-to": uri}
+    # Insertion-ordered, not sets: the assembled dicts inherit this order, and a
+    # set's iteration order varies between interpreter runs (string hashing is
+    # randomised).  Downstream code that keeps one entry per path takes whichever
+    # node it sees last, so a set made `brec verify` report a different hash for
+    # the same artifact from one run to the next.  Trace order also gives that
+    # "last one wins" a meaning: the final version of a file written repeatedly.
+    file_uris: dict[str, None] = {}
+    proc_uris: dict[str, None] = {}
     current: str | None = None
 
     # ── Inner helpers ─────────────────────────────────────────────────────────
@@ -102,7 +121,7 @@ def parse_out(path: Path) -> BuildGraph:
         can carry are declaration enough.
         """
         if uri not in proc_uris and uri not in file_uris:
-            proc_uris.add(uri)
+            proc_uris[uri] = None
             raw.setdefault(uri, {})
 
     def _set_str(uri: str, prop: str, val: str) -> None:
@@ -158,10 +177,10 @@ def parse_out(path: Path) -> BuildGraph:
             if m:
                 uri, typ = m.group(1), m.group(2)
                 if typ == "file":
-                    file_uris.add(uri)
+                    file_uris[uri] = None
                     raw.setdefault(uri, {})
                 elif typ == "process":
-                    proc_uris.add(uri)
+                    proc_uris[uri] = None
                     raw.setdefault(uri, {})
                 current = uri
                 continue
@@ -177,6 +196,13 @@ def parse_out(path: Path) -> BuildGraph:
             m = _INT_RE.match(line)
             if m:
                 _set_int(m.group(1), m.group(2), m.group(3))
+                current = None
+                continue
+
+            # Rename ends hung off a blank node: _:renameN b:rename-from :fX .
+            m = _BNODE_RE.match(line)
+            if m:
+                bnodes.setdefault(m.group(1), {})[m.group(2)] = m.group(3)
                 current = None
                 continue
 
@@ -247,6 +273,25 @@ def parse_out(path: Path) -> BuildGraph:
 
     # ── Assemble ProcessNode objects ──────────────────────────────────────────
 
+    def _rename_targets(targets: list[str]) -> list[str]:
+        """Resolve rename edges to the file each rename produced.
+
+        A blank-node edge stands for a pair; the file that exists afterwards is
+        its ``b:rename-to`` end, which is what callers treat renames as: another
+        way for a file to appear as a process output.  A direct ``:file`` object
+        is kept as-is, and an edge whose blank node was never described is
+        dropped rather than passed on as an unresolvable URI.
+        """
+        out: list[str] = []
+        for target in targets:
+            if not target.startswith("_:"):
+                out.append(target)
+                continue
+            to = bnodes.get(target, {}).get("rename-to")
+            if to is not None:
+                out.append(to)
+        return out
+
     procs: dict[str, ProcessNode] = {}
     for uri in proc_uris:
         d = raw.get(uri, {})
@@ -260,7 +305,7 @@ def parse_out(path: Path) -> BuildGraph:
             reads=list(d.get("reads", [])),
             writes=list(d.get("writes", [])),
             execs=list(d.get("execs", [])),
-            renames=list(d.get("renames", [])),
+            renames=_rename_targets(d.get("renames", [])),
             role=None,
         )
 

@@ -300,6 +300,75 @@ def test_rename_parsed_into_renames(tmp_path: Path) -> None:
     assert graph.procs[":p0"].renames == [":f0"]
 
 
+def test_rename_blank_node_resolves_to_the_file_it_produced(tmp_path: Path) -> None:
+    """The shape record_rename() actually writes: a pair hung off a blank node."""
+    out = tmp_path / "rename_bnode.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        ":f0 a b:file .\n"
+        ":f0 b:abspath \"/tmp/foo.tmp\" .\n"
+        ":f1 a b:file .\n"
+        ":f1 b:abspath \"/tmp/foo\" .\n"
+        ":p0 a b:process .\n"
+        ":p0 b:pid 1 .\n"
+        ":p0 b:cmd \"mv\" .\n"
+        ":p0 b:rename _:rename0 .\n"
+        "_:rename0 b:rename-from :f0 .\n"
+        "_:rename0 b:rename-to :f1 .\n",
+        encoding="utf-8",
+    )
+    graph = parse_out(out)
+    assert graph.procs[":p0"].renames == [":f1"]
+
+
+def test_rename_blank_node_without_a_target_is_dropped(tmp_path: Path) -> None:
+    """An undescribed blank node yields nothing, not an unresolvable URI."""
+    out = tmp_path / "rename_dangling.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        ":p0 a b:process .\n"
+        ":p0 b:pid 1 .\n"
+        ":p0 b:cmd \"mv\" .\n"
+        ":p0 b:rename _:rename7 .\n",
+        encoding="utf-8",
+    )
+    assert parse_out(out).procs[":p0"].renames == []
+
+
+# ── Node order is the trace's order, and the same on every run ───────────────
+
+def test_nodes_keep_trace_order(tmp_path: Path) -> None:
+    """Order must not come from a set.
+
+    Callers keep one entry per path and take the last node they see, so an
+    order that varies between runs makes them report a different hash for the
+    same artifact from one run to the next.
+    """
+    out = tmp_path / "order.out"
+    lines = [
+        "@prefix : <http://build-recorder.org/data#> .",
+        "@prefix b: <http://build-recorder.org/rdf#> .",
+    ]
+    for i in range(30):
+        lines += [
+            f":f{i} a b:file .",
+            f':f{i} b:abspath "/build/out.o" .',
+            f':f{i} b:hash "{i:040d}" .',
+            f":p{i} a b:process .",
+            f":p{i} b:pid {i} .",
+            f':p{i} b:cmd "cc" .',
+        ]
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    graph = parse_out(out)
+    assert list(graph.files) == [f":f{i}" for i in range(30)]
+    assert list(graph.procs) == [f":p{i}" for i in range(30)]
+    # ... so "the last node for this path" is the last version written.
+    assert list(graph.files.values())[-1].git_blob_sha1 == f"{29:040d}"
+
+
 # ── b:creates and b:execs both map to ProcessNode.execs ──────────────────────
 
 def test_creates_maps_to_execs(tmp_path: Path) -> None:

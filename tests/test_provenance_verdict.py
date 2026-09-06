@@ -105,6 +105,32 @@ def test_verdict_flags_prebuilt_binaries(out_file):
     assert by_art["/home/u/proj/build/blob.bin"].verdict == "GREY"
 
 
+def test_findings_for_one_path_keep_graph_order(tmp_path):
+    """Two nodes, one path: the tie must break the same way on every run.
+
+    Findings are sorted by (verdict, artifact), so a path written more than once
+    produces findings the sort cannot separate.  The sort is stable, so their
+    order is the order they were appended in — which came from iterating a set,
+    and so differed between runs: two runs of `brec verdict` over one trace
+    disagreed about which piece of evidence belonged to which line.
+    """
+    out = tmp_path / "twice.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        + _file(":fprea", "/opt/pre/a.a", "a.a")
+        + _file(":fpreb", "/opt/pre/b.a", "b.a")
+        + _file(":fout1", "/home/u/proj/build/libx.a", "libx.a")
+        + _file(":fout2", "/home/u/proj/build/libx.a", "libx.a")
+        + ":par1 a b:process .\n:par1 b:reads :fprea .\n:par1 b:writes :fout1 .\n"
+        + ":par2 a b:process .\n:par2 b:reads :fpreb .\n:par2 b:writes :fout2 .\n"
+    )
+    rep = pv.compute_verdict(parse_out(out), [], [StubBackend()])
+
+    tied = [f for f in rep.findings if f.artifact == "/home/u/proj/build/libx.a"]
+    assert [f.foreign_leaves for f in tied] == [["/opt/pre/a.a"], ["/opt/pre/b.a"]]
+
+
 def test_clean_build_is_green(out_file, tmp_path):
     # Keep only the clean cc1 -> ld -> app chain.
     clean = "\n".join(

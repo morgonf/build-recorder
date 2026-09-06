@@ -361,10 +361,13 @@ def compute_verdict(
     verdict_by_uri: dict[str, str] = {}
     green = red = grey = 0
     real = 0
-    for furi in produced:
-        fn = files.get(furi)
-        if fn is None:
+    # In graph order, not set order: the findings below are printed in the order
+    # they are appended, and iterating the set put the same trace's findings in a
+    # different order on every run (string hashing is randomised).
+    for furi in files:
+        if furi not in produced:
             continue
+        fn = files[furi]
         real_art = is_build_artifact(fn.abspath)
         if real_art:
             real += 1
