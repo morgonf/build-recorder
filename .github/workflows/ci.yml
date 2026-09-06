@@ -80,7 +80,7 @@ jobs:
           mkdir -p payload && cp f1.o payload/
           printf 'never built here\n' > payload/stray.bin
           set +e
-          python3 provenance-verdict.py smoke.out --payload payload --json verdict.json
+          python3 -m brec verdict smoke.out --payload payload --json verdict.json
           rc=$?
           set -e
           # 0 GREEN, 1 RED, 3 GREY are verdicts; 2 is a usage error.

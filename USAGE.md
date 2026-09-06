@@ -60,7 +60,7 @@ build-recorder [-o outfile] [-2 | --sha256] команда
 записываемую командную строку.
 
 По умолчанию хеш остаётся SHA-1, чтобы значения совпадали с git и с метаданными
-пакетов (сверка вендоринга через `verify-build.py` опирается на это). Для
+пакетов (сверка вендоринга через `brec verify` опирается на это). Для
 состязательной модели нужен `-2`: коллизия SHA-1 практически достижима, а
 значит, злоумышленник мог бы подогнать прекомпилят под хеш файла, собранного из
 исходников, и обойти вердикт. Инструменты анализа принимают оба варианта и сами
@@ -118,7 +118,7 @@ docker run --rm \
 ### 3. Проанализировать результат
 
 ```bash
-python3 /home/user/claude/build-recorder/build-report.py \
+python3 -m brec report \
   ~/build-recorder-out/myproject/myproject-build.out \
   --report
 ```
@@ -235,6 +235,28 @@ Entrypoint автоматически:
 
 Выходной файл `<pkgname>-build.out` содержит RDF Turtle с полным графом сборки.
 
+### Единая точка входа: `brec`
+
+Весь анализ живёт в пакете `brec` и вызывается одной командой с подкомандами
+(из корня репозитория; после `pip3 install .` доступна просто как `brec`):
+
+```bash
+python3 -m brec --help
+```
+
+| Подкоманда | Что делает |
+|---|---|
+| `brec enrich` | приписывает файлам трассы пакет-владелец по `rpm-dump.txt` |
+| `brec verify` | отчёт по зависимостям: статика, динамика, сверка с upstream |
+| `brec sbom` | CycloneDX SBOM и CVE-отчёт по вендорированным компонентам |
+| `brec verdict` | вердикт «собрано из исходников»: GREEN / RED / GREY |
+| `brec buildreq` | объявленные BuildRequires против фактически прочитанных |
+| `brec report` | SPARQL-сводка по сырой трассе (нужен rdflib) |
+
+Зависимости у подкоманд разные: rdflib нужен только `brec report` и
+подтягивается лишь при фактическом чтении графа, поэтому его отсутствие ломает
+одну эту подкоманду, а не весь CLI.
+
 ### Формат файла
 
 Каждая строка — тройка `субъект предикат объект .`:
@@ -269,27 +291,27 @@ Entrypoint автоматически:
 | `b:hardlink` | ссылка | Жёсткая ссылка (новое имя, то же содержимое и хеш) |
 | `b:coverage_gap` | строка | Процесс применял I/O, недоступный наблюдению (`"io_uring"`) |
 
-### Автономный анализатор build-report.py
+### Автономный анализатор: `brec report`
 
 ```bash
 # Установить зависимость (один раз)
 pip3 install rdflib
 
 # Полный анализ в консоль
-python3 build-report.py file.out
+python3 -m brec report file.out
 
 # Конкретный запрос
-python3 build-report.py file.out --query languages
-python3 build-report.py file.out --query tools
-python3 build-report.py file.out --query externals
-python3 build-report.py file.out --query libs
-python3 build-report.py file.out --query sources
+python3 -m brec report file.out --query languages
+python3 -m brec report file.out --query tools
+python3 -m brec report file.out --query externals
+python3 -m brec report file.out --query libs
+python3 -m brec report file.out --query sources
 
 # Markdown-отчёт (сохраняется рядом с .out)
-python3 build-report.py file.out --report
+python3 -m brec report file.out --report
 
 # Отчёт в файл без вывода в консоль
-python3 build-report.py file.out --report report.md --quiet
+python3 -m brec report file.out --report report.md --quiet
 ```
 
 **Доступные запросы:**
@@ -307,7 +329,7 @@ python3 build-report.py file.out --report report.md --quiet
 | `tree` | Дерево процессов (2 уровня) |
 | `headers` | Топ системных заголовков по числу включений |
 
-### Вердикт «собрано из исходников» (provenance-verdict.py)
+### Вердикт «собрано из исходников» (`brec verdict`)
 
 Отвечает на вопрос, ради которого инструмент и существует: собран ли пакет
 полностью из исходных текстов, без инкорпорации ранее скомпилированных бинарных
@@ -318,11 +340,11 @@ RED и нуле GREY.
 
 ```bash
 # Минимально: только по наблюдённым файлам
-python3 provenance-verdict.py build.out
+python3 -m brec verdict build.out
 
 # Как надо: с атрибуцией пакетов и сверкой того, что реально уезжает
 rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]' > rpm-dump.txt
-python3 provenance-verdict.py build.out \
+python3 -m brec verdict build.out \
     --rpm-dump rpm-dump.txt \
     --payload ~/RPM/BUILDROOT/pkg-1.0-alt1.x86_64 \
     --json verdict.json
@@ -332,7 +354,7 @@ python3 provenance-verdict.py build.out \
 
 **`--rpm-dump` обязателен на практике.** Без атрибуции пакетов системные
 библиотеки (`libc.so.6` и подобные) выглядят как чужие прекомпиляты и дают
-ложный RED. Альтернатива: заранее прогнать `enrich.py <out> <rpm-dump>`, тогда
+ложный RED. Альтернатива: заранее прогнать `python3 -m brec enrich <out> <rpm-dump>`, тогда
 атрибуция уже вшита в `.out`.
 
 **`--payload` определяет, о чём вообще утверждение.** Без него вердикт говорит
@@ -370,7 +392,7 @@ python3 provenance-verdict.py build.out \
 Полная формулировка гарантии, допущения и перечень открытых путей:
 `doc/threat-model.md`.
 
-### Сверка BuildRequires с фактически прочитанным (buildreq-audit.py)
+### Сверка BuildRequires с фактически прочитанным (`brec buildreq`)
 
 Spec говорит, что пакету нужно для сборки; трасса говорит, что сборка открыла.
 Инструмент сравнивает две стороны и печатает расхождения:
@@ -385,7 +407,7 @@ Spec говорит, что пакету нужно для сборки; тра�
 
 ```bash
 # Все три входа контейнер кладёт рядом с трассой в режиме SRPM
-python3 buildreq-audit.py build.out \
+python3 -m brec buildreq build.out \
     --declared builddeps-declared.txt \
     --rpm-deps rpm-deps.txt \
     --rpm-dump rpm-dump.txt \
@@ -397,7 +419,7 @@ python3 buildreq-audit.py build.out \
 |----------|----------------|-------|
 | `--declared` | `rpm -qp --requires pkg.src.rpm` | объявленная сторона, одна возможность на строку |
 | `--rpm-deps` | `rpm -qa --qf '[P\t%{PROVIDENAME}\t%{NAME}\n]'` плюс `[R\t%{NAME}\t%{REQUIRENAME}\n]` | транзитивное замыкание. Без него всё, что использовано косвенно, попадёт в `USED, NOT DECLARED` |
-| `--rpm-dump` | `rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]'` | атрибуция файлов, если трасса не прогнана через `enrich.py`, и резолв файловых возможностей (`/bin/sh`) |
+| `--rpm-dump` | `rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]'` | атрибуция файлов, если трасса не прогнана через `brec enrich`, и резолв файловых возможностей (`/bin/sh`) |
 | `--implicit` | имя пакета, повторяемо | пакеты, которые есть в любом сборочном окружении. Для ALT передавать `rpm-build`: иначе `glibc-devel`, `gcc-common` и остальная база заполнят список недообъявленного |
 | `--indirect-depth` | число, по умолчанию 1 | на сколько шагов зависимости объявлению засчитывается чужое чтение. Единица покрывает обёртки (`gcc` → `gcc13`). Больше ставить незачем: на второй-третий шаг любое `-devel` дотягивается до тулчейна, и тогда удовлетворённым выглядит всё подряд |
 
@@ -559,5 +581,7 @@ build-recorder/
 │   ├── Dockerfile      # multi-stage: сборка build-recorder + runtime
 │   ├── entrypoint.sh   # логика запуска (git / srpm режимы)
 │   └── docker-compose.yml
-└── build-report.py     # автономный SPARQL-анализатор
+└── brec/               # анализ трассы: пакет и CLI `python3 -m brec`
+    ├── cli.py          # диспетчер подкоманд
+    └── commands/       # enrich, verify, sbom, verdict, buildreq, report
 ```

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -13,13 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from brec.ir import PackageRef
 from brec.model import parse_out
 
-# Load the hyphenated script as a module.
-_spec = importlib.util.spec_from_file_location(
-    "provenance_verdict", Path(__file__).parent.parent / "provenance-verdict.py"
-)
-pv = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = pv          # needed for dataclasses under importlib load
-_spec.loader.exec_module(pv)
+from brec.commands import verdict as pv
 
 
 class StubBackend:

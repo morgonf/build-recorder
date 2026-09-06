@@ -75,9 +75,9 @@ you can sign your commit automatically with `git commit -s`.
 
 ## Running the tests
 
-The tracer itself is built with autotools; the analysis layer (`enrich.py`,
-`sbom.py`, `verify-build.py`, `provenance-verdict.py` and the `brec` package)
-is Python and has a `pytest` suite under `tests/`.
+The tracer itself is built with autotools; the analysis layer (the `brec`
+package and its CLI, `python3 -m brec <command>`) is Python and has a `pytest`
+suite under `tests/`.
 
 ```sh
 autoreconf -i && ./configure && make

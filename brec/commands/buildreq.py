@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-buildreq-audit.py — declared BuildRequires versus the packages actually read.
+brec buildreq — declared BuildRequires versus the packages actually read.
 
 The spec says what the build needs; the trace says what it opened.  This
 compares the two and prints the disagreements:
@@ -20,7 +19,7 @@ package looks from a trace (ALT declares `gcc`, the build reads `gcc13`).
 Inputs (all produced inside the build environment, where they mean something):
 
   <build.out>        build-recorder trace, ideally already enriched by
-                     enrich.py; otherwise pass --rpm-dump and attribution
+                     `brec enrich`; otherwise pass --rpm-dump and attribution
                      happens here.
   --declared FILE    one capability per line: rpm -qp --requires <pkg>.src.rpm
   --rpm-deps FILE    provides/requires graph of the installed packages:
@@ -45,9 +44,9 @@ Caveats that belong in any reading of the output:
     reported as unresolved, which is the gap between the spec and the image.
 
 Usage:
-  python3 buildreq-audit.py build.out --declared builddeps-declared.txt \\
+  brec buildreq build.out --declared builddeps-declared.txt \\
       --rpm-deps rpm-deps.txt --rpm-dump rpm-dump.txt --implicit rpm-build
-  python3 buildreq-audit.py build.out --declared d.txt --json audit.json
+  brec buildreq build.out --declared d.txt --json audit.json
 """
 
 from __future__ import annotations
@@ -58,8 +57,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 from brec.buildreq import BuildReqReport, audit, parse_declared, parse_rpm_deps
 from brec.ir import BuildGraph
 from brec.model import parse_out
@@ -69,7 +66,7 @@ from brec.provenance.registry import detect_backends
 def make_resolvers(graph: BuildGraph, rpm_dump: Optional[Path]):
     """Build (package_of, file_lookup) over the enriched graph and/or a dump.
 
-    Attribution already baked into the trace by enrich.py wins; the live
+    Attribution already baked into the trace by `brec enrich` wins; the live
     backend is the fallback, and the only source for capability paths that
     the build never opened.
     """
@@ -156,11 +153,7 @@ def render(rep: BuildReqReport, max_files: int) -> str:
 
     return "\n".join(out)
 
-
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Compare declared BuildRequires with the packages the build actually read",
-    )
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", type=Path, help="build-recorder .out trace")
     ap.add_argument("--declared", type=Path, required=True,
                     help="declared capabilities, one per line (rpm -qp --requires)")
@@ -178,8 +171,9 @@ def main() -> int:
     ap.add_argument("--json", type=Path, help="also write the report as JSON")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 when something was used but not declared")
-    args = ap.parse_args()
 
+
+def run(args) -> int:
     for path in (args.out_file, args.declared, args.rpm_deps, args.rpm_dump):
         if path is not None and not path.exists():
             print(f"ERROR: file not found: {path}", file=sys.stderr)
@@ -211,7 +205,3 @@ def main() -> int:
         print(f"JSON written: {args.json}")
 
     return 1 if (args.strict and rep.used_undeclared) else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

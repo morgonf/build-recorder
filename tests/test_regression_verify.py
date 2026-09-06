@@ -7,25 +7,19 @@ Non-deterministic fields normalized before comparison:
   - "Generated: YYYY-MM-DD HH:MM UTC" line in Markdown
 """
 
-import importlib.util
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
+from brec.commands import verify as vb
 from brec.model import parse_out
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-# verify-build.py has a hyphen — load via importlib
-_VB_PATH = Path(__file__).parent.parent / "verify-build.py"
-_spec = importlib.util.spec_from_file_location("verify_build", _VB_PATH)
-vb = importlib.util.module_from_spec(_spec)
-sys.modules["verify_build"] = vb
-_spec.loader.exec_module(vb)
+_VB_PATH = Path(__file__).parent.parent / "brec" / "commands" / "verify.py"
 
 _NORM_TS = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?"
@@ -143,7 +137,7 @@ def test_verify_md_golden(tiny_analysis) -> None:
 # ── No own Turtle parser ──────────────────────────────────────────────────────
 
 def test_verify_has_no_own_turtle_parser() -> None:
-    """verify-build.py must not contain its own line-by-line .out parser."""
+    """`brec verify` must not contain its own line-by-line .out parser."""
     src = _VB_PATH.read_text(encoding="utf-8")
     assert r"a\s+b:file" not in src, "verify-build.py still has b:file Turtle pattern"
     assert "file_uris" not in src, "verify-build.py still has file_uris parser variable"
@@ -184,7 +178,7 @@ def test_verify_no_proc_kind_function() -> None:
 
 
 def test_verify_uses_brec_classify_roles() -> None:
-    """verify-build.py must import and use classify_roles from brec.classify."""
+    """`brec verify` must import and use classify_roles from brec.classify."""
     src = _VB_PATH.read_text(encoding="utf-8")
     assert "classify_roles" in src, "classify_roles not imported in verify-build.py"
 

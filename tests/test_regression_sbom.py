@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path
 
-import sbom
+from brec.commands import sbom
 from brec.model import parse_out
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -102,6 +102,6 @@ def test_sbom_report_golden(tiny_out: Path) -> None:
 
 def test_sbom_has_no_own_turtle_parser() -> None:
     """sbom.py must not contain its own line-by-line .out parser."""
-    src = (Path(__file__).parent.parent / "sbom.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent.parent / "brec" / "commands" / "sbom.py").read_text(encoding="utf-8")
     assert r"a\s+b:file" not in src, "sbom.py still has b:file Turtle pattern"
     assert "file_uris" not in src, "sbom.py still has file_uris parser variable"

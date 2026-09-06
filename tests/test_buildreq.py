@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -23,13 +22,8 @@ from brec.buildreq import (
 from brec.model import parse_out
 from brec.provenance.rpm import RpmBackend
 
-# Load the hyphenated CLI as a module, same trick as test_provenance_verdict.py.
-_spec = importlib.util.spec_from_file_location(
-    "buildreq_audit", Path(__file__).parent.parent / "buildreq-audit.py"
-)
-bra = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = bra
-_spec.loader.exec_module(bra)
+from brec.cli import main as cli_main
+from brec.commands import buildreq as bra
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -244,28 +238,24 @@ def test_enriched_trace_needs_no_rpm_dump(fixtures_dir: Path, tmp_path: Path):
     assert rep.used_undeclared == []
 
 
-def test_cli_strict_exit_code(monkeypatch, sample_out, declared_file, rpm_dump, capsys):
-    argv = [
-        "buildreq-audit.py", str(sample_out),
+def test_cli_strict_exit_code(sample_out, declared_file, rpm_dump, capsys):
+    rc = cli_main([
+        "buildreq", str(sample_out),
         "--declared", str(declared_file),
         "--rpm-dump", str(rpm_dump),
         "--strict",
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
-    rc = bra.main()
+    ])
     out = capsys.readouterr().out
     assert rc == 1                       # libbaz-devel is used and undeclared
     assert "USED, NOT DECLARED (1)" in out
     assert "libbaz-devel" in out
 
 
-def test_cli_missing_input_file(monkeypatch, sample_out, rpm_dump, capsys):
-    argv = [
-        "buildreq-audit.py", str(sample_out),
+def test_cli_missing_input_file(sample_out, rpm_dump, capsys):
+    assert cli_main([
+        "buildreq", str(sample_out),
         "--declared", str(sample_out.parent / "no-such-file.txt"),
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
-    assert bra.main() == 2
+    ]) == 2
     assert "not found" in capsys.readouterr().err
 
 

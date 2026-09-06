@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-provenance-verdict.py — "built entirely from source, no prebuilt binaries" verdict.
+brec verdict — "built entirely from source, no prebuilt binaries" verdict.
 
 Answers the core question build-recorder exists for, from observation alone:
 does the package build fully from source, with no previously-compiled binary
@@ -33,16 +32,16 @@ Two things keep that verdict from being vacuous:
     gaps      through (io_uring). A trace with a gap can never be GREEN: its
               file layer is known-incomplete, so silence is not evidence.
 
-Run enrich.py on the .out first: without OS-package attribution, system
+Run `brec enrich` on the .out first: without OS-package attribution, system
 libraries look like foreign binaries and inflate RED/GREY. The verdict is only
 as sound as the graph — see the syscall-coverage audit for its assumptions
 (trusted toolchain, no covert channels, in-process JVM/.NET out of scope).
 
 Usage:
-  python3 provenance-verdict.py <build.out>
-  python3 provenance-verdict.py <build.out> --rpm-dump rpm-dump.txt
-  python3 provenance-verdict.py <build.out> --payload /path/to/buildroot
-  python3 provenance-verdict.py <build.out> --payload files.list --json verdict.json
+  brec verdict <build.out>
+  brec verdict <build.out> --rpm-dump rpm-dump.txt
+  brec verdict <build.out> --payload /path/to/buildroot
+  brec verdict <build.out> --payload files.list --json verdict.json
 """
 
 from __future__ import annotations
@@ -54,8 +53,6 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
 
 from brec.classify import is_build_artifact
 from brec.ir import BuildGraph, FileNode
@@ -316,7 +313,7 @@ def compute_verdict(
         fn = files.get(furi)
         ok = False
         if fn is not None:
-            # Package attribution baked in by enrich.py takes precedence, so the
+            # Package attribution baked in by `brec enrich` takes precedence, so the
             # verdict runs on an enriched .out with no live backend needed.
             if fn.pkg_name or fn.rpm_name:
                 ok = True
@@ -596,9 +593,7 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append(f"      {e.reason}")
     return "\n".join(lines)
 
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Built-from-source / no-prebuilt-binary verdict.")
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", type=Path, help="build-recorder .out (enriched)")
     ap.add_argument("--rpm-dump", type=Path, default=None,
                     help="rpm file→package dump for OS-package attribution")
@@ -607,8 +602,10 @@ def main() -> int:
                          "directory, or a file listing one path per line "
                          "(e.g. rpm -qpl). Every entry must trace to the graph.")
     ap.add_argument("--json", type=Path, default=None, help="write JSON report here")
-    args = ap.parse_args()
 
+
+def run(args) -> int:
+    """Exit code: 0 GREEN, 1 RED, 3 GREY (unverifiable), 2 usage error."""
     if not args.out_file.exists():
         print(f"error: {args.out_file} not found", file=sys.stderr)
         return 2
@@ -629,9 +626,4 @@ def main() -> int:
         args.json.write_text(json.dumps(rep.to_dict(), indent=2))
         print(f"\nJSON report → {args.json}")
 
-    # Exit code: 0 GREEN, 1 RED, 2 GREY (unverifiable)
     return {"GREEN": 0, "RED": 1, "GREY": 3}[rep.verdict]
-
-
-if __name__ == "__main__":
-    sys.exit(main())

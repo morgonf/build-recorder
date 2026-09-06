@@ -114,3 +114,7 @@ doc/bibliography/pdf/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Python packaging artifacts (pip install . / python -m build)
+/build/
+*.egg-info/

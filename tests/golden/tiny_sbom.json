@@ -8,7 +8,7 @@
     "tools": [
       {
         "vendor": "build-recorder",
-        "name": "sbom.py",
+        "name": "brec sbom",
         "version": "1.0"
       }
     ],

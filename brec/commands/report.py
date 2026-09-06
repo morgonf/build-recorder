@@ -1,15 +1,14 @@
-#!/usr/bin/env python3
 """
-build-report.py — автономный анализатор файлов build-recorder.
+brec report — автономный анализатор файлов build-recorder.
 
 Читает .out файл (RDF Turtle), выполняет SPARQL-запросы через rdflib
 и выводит отчёт в консоль и/или сохраняет в Markdown-файл.
 
 Использование:
-    build-report.py <file.out>
-    build-report.py <file.out> --query stats
-    build-report.py <file.out> --report [output.md]
-    build-report.py <file.out> --report --quiet
+    brec report <file.out>
+    brec report <file.out> --query stats
+    brec report <file.out> --report [output.md]
+    brec report <file.out> --report --quiet
 
 Зависимости:
     pip3 install rdflib
@@ -26,9 +25,11 @@ build-report.py — автономный анализатор файлов build
     libs       — собранные библиотеки (.so, .a)
     tree       — дерево процессов
     headers    — топ системных заголовков
-    packages   — пакетные зависимости (требует enrich.py)
+    packages   — пакетные зависимости (требует `brec enrich`)
     report     — полный Markdown-отчёт
 """
+
+from __future__ import annotations
 
 import argparse
 import re
@@ -37,12 +38,6 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-
-try:
-    import rdflib
-except ImportError:
-    print("ERROR: rdflib не установлен. Выполните: pip3 install rdflib", file=sys.stderr)
-    sys.exit(1)
 
 # ── Пространства имён ─────────────────────────────────────────────────────────
 
@@ -109,7 +104,13 @@ PKG_ROLE = {
 
 # ── Загрузка графа ────────────────────────────────────────────────────────────
 
-def load_graph(path: Path) -> rdflib.Graph:
+def load_graph(path: Path) -> "rdflib.Graph":
+    # Imported here, not at module scope: rdflib is needed by this one command
+    # and by nothing else, so `brec verdict` must not fail when it is absent.
+    try:
+        import rdflib
+    except ImportError:
+        raise SystemExit("ERROR: rdflib не установлен. Выполните: pip3 install rdflib")
     g = rdflib.Graph()
     g.parse(str(path), format="turtle")
     return g
@@ -347,12 +348,12 @@ def tree(g: rdflib.Graph):
 
 
 def packages(g: rdflib.Graph):
-    section("Пакетные зависимости (данные enrich.py)")
+    section("Пакетные зависимости (данные `brec enrich`)")
 
     check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
     if not check or int(check[0][0]) == 0:
         print("\n  Данные о пакетах недоступны.")
-        print("  Запустите: python3 enrich.py <build.out> <rpm-dump.txt>")
+        print("  Запустите: brec enrich <build.out> <rpm-dump.txt>")
         return
 
     print("\n  По типу зависимости:")
@@ -570,11 +571,11 @@ def generate_report(g: rdflib.Graph, src_path: Path) -> str:
             h = str(hash_) if hash_ else '—'
             W(f"| `{str(path).split('/')[-1]}` | `{h}` |")
 
-    # ── Package provenance (if enrich.py was run) ──
+    # ── Package provenance (if `brec enrich` was run) ──
     pkg_check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
     if pkg_check and int(pkg_check[0][0]) > 0:
         W("\n## Пакетные зависимости\n")
-        W("*Данные добавлены `enrich.py` на основе RPM-базы контейнера.*\n")
+        W("*Данные добавлены `brec enrich` на основе RPM-базы контейнера.*\n")
 
         dep_rows = q(g, """
             SELECT ?dep_type (COUNT(DISTINCT ?file) AS ?n)
@@ -627,7 +628,7 @@ def generate_report(g: rdflib.Graph, src_path: Path) -> str:
                 W(f"| `{str(path).split('/')[-1]}` | `{pkg}` |")
 
     W("\n---\n")
-    W(f"*Отчёт сгенерирован `build-report.py` на основе данных `build-recorder`*")
+    W(f"*Отчёт сгенерирован `brec report` на основе данных `build-recorder`*")
     return "\n".join(lines)
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -646,34 +647,30 @@ AVAILABLE = {
     "packages":  packages,
 }
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Анализ файла build-recorder (.out, RDF Turtle) через SPARQL.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument("file", help="Путь к .out файлу build-recorder")
-    parser.add_argument(
+def add_arguments(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("file", help="Путь к .out файлу build-recorder")
+    ap.add_argument(
         "--query", "-q",
         default="all",
         choices=["all"] + list(AVAILABLE) + ["report"],
         help="Запрос для выполнения (по умолчанию: all)",
     )
-    parser.add_argument(
+    ap.add_argument(
         "--report", "-r",
         nargs="?", const=True, metavar="OUTPUT.md",
         help="Сгенерировать Markdown-отчёт (опционально: путь к файлу)",
     )
-    parser.add_argument(
+    ap.add_argument(
         "--quiet", action="store_true",
         help="Не выводить отчёт в консоль (только сохранить в файл)",
     )
-    args = parser.parse_args()
 
+
+def run(args) -> int:
     path = Path(args.file)
     if not path.exists():
         print(f"ERROR: файл не найден: {path}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     print(f"Загрузка {path.name} ...", end=" ", flush=True)
     t0 = time.time()
@@ -682,16 +679,12 @@ def main():
 
     if args.report is not None:
         md = generate_report(g, path)
-        # Определяем путь для сохранения
-        if args.report is True:
-            out_path = path.with_suffix('.md')
-        else:
-            out_path = Path(args.report)
+        out_path = path.with_suffix('.md') if args.report is True else Path(args.report)
         out_path.write_text(md, encoding='utf-8')
         if not args.quiet:
             print(md)
         print(f"\n✓ Отчёт сохранён: {out_path}", file=sys.stderr)
-        return
+        return 0
 
     if args.query == "all":
         for fn in AVAILABLE.values():
@@ -706,6 +699,4 @@ def main():
         AVAILABLE[args.query](g)
 
     print()
-
-if __name__ == "__main__":
-    main()
+    return 0

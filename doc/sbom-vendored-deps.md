@@ -93,7 +93,7 @@ C-файлов.
 
 | Инструмент | Vendor dirs | Бинарный скан | SBOM output | CVE lookup | Офлайн |
 |---|---|---|---|---|---|
-| **sbom.py** (наш) | ✓ точно (только компилируемые) | — | CycloneDX | OSV API | Layer 1 |
+| **`brec sbom`** (наш) | ✓ точно (только компилируемые) | — | CycloneDX | OSV API | Layer 1 |
 | osv-scanner | ✓ (весь дир) | — | — | OSV | нет |
 | cve-bin-tool | — | ✓ 350+ компонентов | CycloneDX | NVD | нет |
 | Syft | частично | — | CycloneDX/SPDX | — | да |
@@ -106,9 +106,9 @@ C-файлов.
 ```
 build-recorder (.out)
        │
-   enrich.py               ← добавляет b:dep_type, b:rpm_name
+   brec enrich             ← добавляет b:dep_type, b:rpm_name
        │
-   sbom.py
+   brec sbom
     ├── Layer 1: path detection        (offline, всегда)
     │   ├── folder name pattern → version (lua-5.3.6 → Lua 5.3.6)
     │   └── known file triggers → component name
@@ -209,7 +209,7 @@ POST https://api.osv.dev/v1/query
   "version": 1,
   "metadata": {
     "timestamp": "2026-05-30T19:00:00Z",
-    "tools": [{"vendor": "build-recorder", "name": "sbom.py"}]
+    "tools": [{"vendor": "build-recorder", "name": "brec sbom"}]
   },
   "components": [
     {
@@ -243,7 +243,7 @@ POST https://api.osv.dev/v1/query
 
 ## Известные компоненты
 
-База встроена в `sbom.py`. Покрывает типичный стек embedded C-проектов.
+База встроена в `brec sbom`. Покрывает типичный стек embedded C-проектов.
 
 | Ключ | Дисплейное имя | Триггеры | OSV ecosystem |
 |---|---|---|---|
@@ -276,13 +276,13 @@ docker run --rm \
   build-recorder:latest
 
 # 2. Обогатить RPM-пакетами
-python3 enrich.py /output/pkg-build.out /output/rpm-dump.txt
+python3 -m brec enrich /output/pkg-build.out /output/rpm-dump.txt
 
 # 3. Создать SBOM и CVE-отчёт (offline: только path detection)
-python3 sbom.py /output/pkg-build.out -o /output/sbom.json
+python3 -m brec sbom /output/pkg-build.out -o /output/sbom.json
 
 # 4. С извлечением версий из исходников и OSV API (если доступны исходники)
-python3 sbom.py /output/pkg-build.out \
+python3 -m brec sbom /output/pkg-build.out \
     --source-dir /path/to/src \
     --osv-api \
     -o /output/sbom.json
@@ -292,7 +292,7 @@ pip install cve-bin-tool
 cve-bin-tool /output/build/libpkg.so --format json -o /output/cve-binary.json
 
 # 6. Генерация отчёта
-python3 build-report.py /output/pkg-build.out --query packages
+python3 -m brec report /output/pkg-build.out --query packages
 ```
 
 ---
@@ -313,8 +313,8 @@ python3 build-report.py /output/pkg-build.out --query packages
 
 | Файл | Назначение |
 |---|---|
-| `sbom.py` | Реализация pipeline |
-| `enrich.py` | Добавление RPM-провенанса (предшествующий шаг) |
-| `build-report.py` | SPARQL-анализ + `--query packages` |
+| `brec/commands/sbom.py` | Реализация pipeline |
+| `brec/commands/enrich.py` | Добавление RPM-провенанса (предшествующий шаг) |
+| `brec/commands/report.py` | SPARQL-анализ + `--query packages` |
 | `doc/sbom-vendored-deps.md` | Этот документ |
 | `doc/build-recorder-schema.ttl` | RDF-схема с `b:rpm_package`, `b:dep_type` |

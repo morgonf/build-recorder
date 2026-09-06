@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 """
-enrich.py — добавляет трипли о пакетном происхождении файлов в .out файл build-recorder.
+brec enrich — добавляет трипли о пакетном происхождении файлов в .out файл build-recorder.
 
 Использование:
-    python3 enrich.py <build.out> <rpm-dump.txt>
-    python3 enrich.py <build.out> <rpm-dump.txt> --dry-run
+    brec enrich <build.out> <rpm-dump.txt>
+    brec enrich <build.out> <rpm-dump.txt> --dry-run
 
 Входные данные:
     <build.out>    — RDF Turtle, вывод build-recorder
@@ -36,6 +35,8 @@ from brec.classify import dep_type_from_path
 from brec.model import parse_out
 from brec.provenance.rpm import RpmBackend
 
+# The literal text written into every enriched .out since the first version:
+# renaming it would make already-enriched traces look unenriched.
 MARKER = "# --- package provenance triples (added by enrich.py) ---\n"
 
 
@@ -106,30 +107,25 @@ def print_stats(
         for pkg, n in sorted(pkg_counts.items(), key=lambda x: -x[1])[:25]:
             print(f"  {pkg:45s}: {n}")
 
-
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Add RPM package provenance triples to a build-recorder .out file.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", help="Path to build-recorder .out (RDF Turtle)")
     ap.add_argument("rpm_dump", help="Path to rpm-dump.txt (path<TAB>name<TAB>nevra)")
     ap.add_argument(
         "--dry-run", action="store_true",
         help="Show stats but do not modify <out_file>",
     )
-    args = ap.parse_args()
 
+
+def run(args) -> int:
     out_file = Path(args.out_file)
     rpm_dump = Path(args.rpm_dump)
 
     if not out_file.exists():
         print(f"ERROR: not found: {out_file}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     if not rpm_dump.exists():
         print(f"ERROR: not found: {rpm_dump}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     if is_already_enriched(out_file):
         print(
@@ -137,7 +133,7 @@ def main() -> None:
             "Remove the enrichment section manually before re-running.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     print(f"Loading RPM dump from {rpm_dump} ...", end=" ", flush=True)
     backend = RpmBackend()
@@ -152,7 +148,7 @@ def main() -> None:
 
     if args.dry_run:
         print("\n[dry-run] No changes written.")
-        return
+        return 0
 
     triples = build_triples(uri_to_abspath, backend)
     print(f"\nAppending {len(triples)} enriched file blocks to {out_file} ...")
@@ -163,7 +159,4 @@ def main() -> None:
         fh.write("\n")
 
     print("Done.")
-
-
-if __name__ == "__main__":
-    main()
+    return 0

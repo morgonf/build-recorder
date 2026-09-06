@@ -104,9 +104,9 @@ def test_upstream_for_unknown_directory() -> None:
 # ── The tools read this registry rather than their own ────────────────────────
 
 def test_cli_scripts_have_no_private_component_tables() -> None:
-    root = Path(__file__).parent.parent
-    sbom_src = (root / "sbom.py").read_text(encoding="utf-8")
-    verify_src = (root / "verify-build.py").read_text(encoding="utf-8")
+    commands = Path(__file__).parent.parent / "brec" / "commands"
+    sbom_src = (commands / "sbom.py").read_text(encoding="utf-8")
+    verify_src = (commands / "verify.py").read_text(encoding="utf-8")
     assert "KNOWN_COMPONENTS" not in sbom_src
     assert "class ComponentSpec" not in sbom_src
     assert "UPSTREAM_DB" not in verify_src

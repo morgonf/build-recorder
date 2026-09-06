@@ -7,7 +7,7 @@
 build-recorder requires `ptrace` privileges and a compiled binary to run.
 In this environment the tool is not yet compiled, so `tiny.out` was constructed
 manually to match the exact flat-triple Turtle format that `build-recorder`
-produces, verified against the regex patterns in `enrich.py` and `verify-build.py`.
+produces, verified against the regex patterns in `brec enrich` and `brec verify`.
 
 **Format:** flat (one triple per line), using `:` prefix for data URIs and
 `b:` prefix for predicates, matching `@prefix` declarations at file top.

@@ -1,4 +1,4 @@
-"""T1.4 regression tests — enrich.py behavior-preserving refactor.
+"""T1.4 regression tests — `brec enrich` behavior-preserving refactor.
 
 Golden baseline: tests/golden/enrich_test.triples
 Captured BEFORE T1.4 changes by running the original enrich.build_triples()
@@ -10,7 +10,6 @@ Non-deterministic fields: none — build_triples output is fully deterministic
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -18,51 +17,50 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from brec.commands import enrich
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-_ENRICH_PATH = Path(__file__).parent.parent / "enrich.py"
-_spec = importlib.util.spec_from_file_location("enrich", _ENRICH_PATH)
-enrich = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(enrich)
+_ENRICH_PATH = Path(__file__).parent.parent / "brec" / "commands" / "enrich.py"
 
 
 # ── Structural: load_rpm_dump and classify_dep_type must be gone ──────────────
 
 def test_enrich_has_no_load_rpm_dump() -> None:
-    """enrich.py must not contain its own load_rpm_dump function."""
+    """`brec enrich` must not contain its own load_rpm_dump function."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "def load_rpm_dump" not in src, "load_rpm_dump still defined in enrich.py"
+    assert "def load_rpm_dump" not in src, "load_rpm_dump still defined in brec/commands/enrich.py"
 
 
 def test_enrich_has_no_classify_dep_type() -> None:
-    """enrich.py must not contain its own classify_dep_type function."""
+    """`brec enrich` must not contain its own classify_dep_type function."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "def classify_dep_type" not in src, "classify_dep_type still defined in enrich.py"
+    assert "def classify_dep_type" not in src, "classify_dep_type still defined in brec/commands/enrich.py"
 
 
 def test_enrich_uses_rpm_backend() -> None:
-    """enrich.py must import and use RpmBackend from brec."""
+    """`brec enrich` must import and use RpmBackend from brec."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "RpmBackend" in src, "RpmBackend not found in enrich.py"
+    assert "RpmBackend" in src, "RpmBackend not found in brec/commands/enrich.py"
 
 
 def test_enrich_uses_dep_type_from_path() -> None:
-    """enrich.py must import dep_type_from_path from brec.classify."""
+    """`brec enrich` must import dep_type_from_path from brec.classify."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "dep_type_from_path" in src, "dep_type_from_path not found in enrich.py"
+    assert "dep_type_from_path" in src, "dep_type_from_path not found in brec/commands/enrich.py"
 
 
 def test_enrich_has_no_tool_dirs_definition() -> None:
     """TOOL_DIRS local definition removed (classification logic now in brec)."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "TOOL_DIRS = " not in src, "TOOL_DIRS still locally defined in enrich.py"
+    assert "TOOL_DIRS = " not in src, "TOOL_DIRS still locally defined in brec/commands/enrich.py"
 
 
 # ── Golden: build_triples output is byte-identical to pre-T1.4 baseline ──────
 
 def test_enrich_build_triples_golden() -> None:
-    """build_triples() with new enrich.py produces byte-identical output."""
+    """build_triples() with the enrich command produces byte-identical output."""
     from brec.provenance.rpm import RpmBackend
 
     out_file = FIXTURES_DIR / "enrich_test.out"

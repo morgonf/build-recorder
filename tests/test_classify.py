@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,10 @@ from brec.ir import (
     ProcessNode,
 )
 from brec.model import parse_out
+from brec.commands import enrich as _enrich
+from brec.commands import sbom as _sbom
+from brec.commands import verdict as _pv
+from brec.commands import verify as _vb
 from brec.provenance.rpm import RpmBackend
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -41,22 +44,10 @@ TINY_OUT = FIXTURES / "tiny.out"
 SAMPLE_OUT = FIXTURES / "classify_sample.out"
 RPM_DUMP = FIXTURES / "classify_rpm_dump.txt"
 
-def _script_source(filename: str) -> str:
-    """Return the text of a top-level CLI script."""
-    return (Path(__file__).parent.parent / filename).read_text(encoding="utf-8")
-
-
-def _load_script(filename: str):
-    """Import a top-level CLI script whose name is not a valid module name."""
-    path = Path(__file__).parent.parent / filename
-    spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_vb = _load_script("verify-build.py")
-_enrich = _load_script("enrich.py")
+def _command_source(name: str) -> str:
+    """Return the text of a `brec` command module."""
+    return (Path(__file__).parent.parent / "brec" / "commands" /
+            name).read_text(encoding="utf-8")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -638,9 +629,8 @@ def test_is_build_artifact_excludes_toolchain_probes(path: str) -> None:
 
 
 def test_is_build_artifact_is_the_only_definition() -> None:
-    """verify-build.py and provenance-verdict.py must share one implementation."""
-    vb = _load_script("verify-build.py")
-    pv = _load_script("provenance-verdict.py")
+    """`brec verify` and `brec verdict` must share one implementation."""
+    vb, pv = _vb, _pv
     assert vb.is_build_artifact is is_build_artifact
     assert pv.is_build_artifact is is_build_artifact
     assert not hasattr(vb, "_is_real_artifact")
@@ -661,17 +651,16 @@ def test_vendor_dir_returns_segment_and_component() -> None:
 
 
 def test_vendor_helpers_are_shared() -> None:
-    """sbom.py and verify-build.py must not re-derive vendor detection."""
-    sb = _load_script("sbom.py")
-    vb = _load_script("verify-build.py")
+    """`brec sbom` and `brec verify` must not re-derive vendor detection."""
+    sb, vb = _sbom, _vb
     assert sb.is_vendor_path is is_vendor_path
     assert sb.vendor_dir is vendor_dir
     assert vb.is_vendor_path is is_vendor_path
     assert not hasattr(sb, "VENDOR_DIRS")
     assert not hasattr(vb, "_is_vendor_path")
-    # verify-build.py used to carry the vendor segment names a third time,
+    # `brec verify` used to carry the vendor segment names a third time,
     # inside collect_vendored_groups().
-    assert "VENDOR_PARTS" not in _script_source("verify-build.py")
+    assert "VENDOR_PARTS" not in _command_source("verify.py")
 
 
 # ── file_role ─────────────────────────────────────────────────────────────────
@@ -696,8 +685,8 @@ def test_file_role(abspath: str, expected: str) -> None:
 
 
 def test_file_role_is_shared_with_verify_build() -> None:
-    """verify-build.py sorts its report by this role and must not redefine it."""
-    vb = _load_script("verify-build.py")
+    """`brec verify` sorts its report by this role and must not redefine it."""
+    vb = _vb
     assert vb.file_role is file_role
     # ... and must not resurrect a FileNode of its own around it.
     assert vb.FileNode is FileNode
