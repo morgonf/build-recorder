@@ -10,6 +10,7 @@
 #   rpm-deps.txt            provides/requires graph
 #   builddeps-declared.txt  declared BuildRequires
 #   build.log               full build output
+#   payload/                the buildroot, when RPMBUILD_STAGE=-bi
 #
 # Usage (inside the container):  run-build.sh /srpms/pkg-1.0-alt1.src.rpm
 set -euo pipefail
@@ -46,10 +47,17 @@ awk '
     !skip { print }
 ' "$spec" > "${spec}.nocheck" && mv "${spec}.nocheck" "$spec"
 
-echo "=== Building under build-recorder: $name ==="
+# -bc covers %prep and %build, which is what the file- and component-level
+# comparisons need.  -bi also runs %install, which fills the buildroot: that is
+# the only way to point `brec verdict --payload` at what actually ships, and
+# without it a fidelity number is computed over every file the build touched,
+# most of which is a compiler cache nobody delivers.
+STAGE="${RPMBUILD_STAGE:--bc}"
+
+echo "=== Building under build-recorder: $name ($STAGE) ==="
 set +e
 build-recorder -o "$trace" \
-    rpmbuild --nodeps --define '_allow_root_build 1' -bc "$spec" \
+    rpmbuild --nodeps --define '_allow_root_build 1' "$STAGE" "$spec" \
     > "${OUTPUT_DIR}/build.log" 2>&1
 rc=$?
 set -e
@@ -74,6 +82,19 @@ if command -v go >/dev/null 2>&1 && [ -n "$(ls -A "$gt" 2>/dev/null)" ]; then
     done < <(find "$builddir" -type f -perm -u+x -newer "$spec" 2>/dev/null | head -20)
 fi
 
+# ── What the package would ship, when %install ran ───────────────────────────
+# Copied out whole rather than listed: the payload check matches by content
+# hash, so it needs the files themselves.
+# %buildroot only exists while a spec is being built, so look for what it left:
+# ALT puts it in %_tmppath as <name>-buildroot.
+tmppath="$(rpm --eval '%_tmppath' 2>/dev/null)"
+buildroot="$(find "$tmppath" -maxdepth 1 -type d -name '*-buildroot' 2>/dev/null | head -1)"
+if [ -n "$buildroot" ] && [ -d "$buildroot" ]; then
+    echo "=== Buildroot: $buildroot ==="
+    mkdir -p "${OUTPUT_DIR}/payload"
+    cp -a "$buildroot/." "${OUTPUT_DIR}/payload/" 2>/dev/null || true
+fi
+
 # ── The rpm side, same as the SRPM mode of the main entrypoint ───────────────
 rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]' 2>/dev/null > "${OUTPUT_DIR}/rpm-dump.txt"
 {
@@ -92,4 +113,5 @@ printf "    trace        : %s (%s lines)\n" "$trace" "$(wc -l < "$trace" 2>/dev/
 printf "    gcc depfiles : %s\n" "$(find "$DEPFILE_DIR" -name '*.d' | wc -l)"
 printf "    rustc depinfo: %s\n" "$(find "${OUTPUT_DIR}/rust-depinfo" -name '*.d' | wc -l)"
 printf "    ground truth : %s\n" "$(ls "$gt" 2>/dev/null | tr '\n' ' ')"
+printf "    payload      : %s file(s)\n" "$(find "${OUTPUT_DIR}/payload" -type f 2>/dev/null | wc -l)"
 exit "$rc"
