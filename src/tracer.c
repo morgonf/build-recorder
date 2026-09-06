@@ -186,13 +186,80 @@ pinfo_next_finfo(PROCESS_INFO *self, int fd)
 	self->finfo =
 		reallocarray(self->finfo, self->finfo_size, sizeof (FILE_INFO));
 	self->fds =
-		reallocarray(self->fds, self->finfo_size, sizeof (FILE_INFO));
+		reallocarray(self->fds, self->finfo_size, sizeof (int));
 	if (self->finfo == NULL)
 	    error(EXIT_FAILURE, errno, "reallocating file info array");
     }
 
     self->fds[self->numfinfo + 1] = fd;
     return self->finfo + (++self->numfinfo);
+}
+
+/*
+ * How many descriptors of this process point at one file entry.
+ *
+ * A shell redirection is open(), dup2() onto the target descriptor, close() of
+ * the original.  Hashing on that first close() caught the file while it was
+ * still empty, and the content written through the duplicate was never hashed
+ * at all: a third of the written nodes in the zlib trace carried the hash of an
+ * empty file, with the real content sitting on a read node elsewhere in the
+ * graph.  So the hash is taken when the last descriptor for the entry goes.
+ */
+static int
+pinfo_count_outname(PROCESS_INFO *self, const char *outname)
+{
+    int n = 0;
+
+    for (int i = 0; i <= self->numfinfo; ++i)
+	if (!strcmp(self->finfo[i].outname, outname))
+	    ++n;
+
+    return n;
+}
+
+// Drop one descriptor, hashing the file if this was the last one naming it.
+static void
+pinfo_close_fd(PROCESS_INFO *self, int fd)
+{
+    FILE_INFO *f = pinfo_find_finfo(self, fd);
+
+    if (f == NULL)
+	return;
+
+    if (pinfo_count_outname(self, f->outname) == 1) {
+	f->hash = get_file_hash(f->abspath);
+	record_hash(f->outname, f->hash);
+
+	// Add it to global cache list
+	*next_finfo() = *f;
+    }
+
+    // Remove the descriptor from the process' list
+    for (int i = f - self->finfo; i < self->numfinfo; ++i) {
+	self->finfo[i] = self->finfo[i + 1];
+	self->fds[i] = self->fds[i + 1];
+    }
+
+    --self->numfinfo;
+}
+
+// dup(2) and friends: the new descriptor names the same file entry, so it
+// carries the same subject and the same paths.
+static void
+pinfo_dup_fd(PROCESS_INFO *self, int oldfd, int newfd)
+{
+    FILE_INFO *from = pinfo_find_finfo(self, oldfd);
+
+    if (from == NULL || oldfd == newfd)
+	return;
+
+    // dup2/dup3 close the target first, which is a close like any other.
+    pinfo_close_fd(self, newfd);
+
+    // Copied by value before next_finfo(), which may move the array.
+    FILE_INFO copy = *from;
+
+    *pinfo_next_finfo(self, newfd) = copy;
 }
 
 char *
@@ -562,6 +629,15 @@ reap_process(pid_t pid)
     // numfinfo is the index of the last entry (starts at -1), not a count.
     for (int i = 0; i <= process_state->numfinfo; ++i) {
 	FILE_INFO *f = &process_state->finfo[i];
+	int duplicate = 0;
+
+	// Duplicated descriptors share an entry; hash the file once.
+	for (int j = 0; j < i; ++j)
+	    if (!strcmp(process_state->finfo[j].outname, f->outname))
+		duplicate = 1;
+
+	if (duplicate)
+	    continue;
 
 	f->hash = get_file_hash(f->abspath);
 	record_hash(f->outname, f->hash);
@@ -712,26 +788,7 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    // int close(int fd);
 	    fd = (int) pi->args[0];
 
-	    f = pinfo_find_finfo(pi, fd);
-
-	    if (f != NULL) {
-		f->hash = get_file_hash(f->abspath);
-		record_hash(f->outname, f->hash);
-
-		// Add it to global cache list
-		*next_finfo() = *f;
-
-		// Remove the file from the process' list
-		for (int i = f - pi->finfo; i < pi->numfinfo; ++i) {
-		    pi->finfo[i] = pi->finfo[i + 1];
-		}
-
-		for (int i = f - pi->finfo; i < pi->numfinfo; ++i) {
-		    pi->fds[i] = pi->fds[i + 1];
-		}
-
-		--pi->numfinfo;
-	    }
+	    pinfo_close_fd(pi, fd);
 	    break;
 #endif
 #ifdef HAVE_SYS_EXECVE
@@ -816,6 +873,31 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	case SYS_clone:
 	    // int clone(...);
 	    handle_create_process(pi, rval);
+	    break;
+#endif
+#ifdef HAVE_SYS_DUP
+	case SYS_dup:
+	    // int dup(int oldfd);  the new descriptor is the return value
+	    pinfo_dup_fd(pi, (int) pi->args[0], (int) rval);
+	    break;
+#endif
+#ifdef HAVE_SYS_DUP2
+	case SYS_dup2:
+	    // int dup2(int oldfd, int newfd);
+	    pinfo_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
+	    break;
+#endif
+#ifdef HAVE_SYS_DUP3
+	case SYS_dup3:
+	    // int dup3(int oldfd, int newfd, int flags);
+	    pinfo_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
+	    break;
+#endif
+#ifdef HAVE_SYS_FCNTL
+	case SYS_fcntl:
+	    // int fcntl(int fd, int cmd, ...);  F_DUPFD is a dup by another name
+	    if ((int) pi->args[1] == F_DUPFD || (int) pi->args[1] == F_DUPFD_CLOEXEC)
+		pinfo_dup_fd(pi, (int) pi->args[0], (int) rval);
 	    break;
 #endif
 #ifdef HAVE_SYS_CLONE3

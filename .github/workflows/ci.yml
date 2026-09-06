@@ -85,6 +85,30 @@ jobs:
           print(f"ok: {holders[0].uri} carries both, {len(g.procs)} process node(s)")
           PY
 
+      - name: Hash a file written through a redirection (dup2 regression)
+        run: |
+          # A shell redirection is open(), dup2() onto the target descriptor,
+          # close() of the original.  Hashing on that first close caught the
+          # file while it was still empty: a third of the written nodes in a
+          # zlib trace carried the hash of an empty file.
+          ./build-recorder -o redirect.out bash -c 'printf "content\n" > redirected.txt'
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from brec.model import parse_out
+
+          data = Path("redirected.txt").read_bytes()
+          want = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+          g = parse_out(Path("redirect.out"))
+          nodes = [f for f in g.files.values() if f.abspath.endswith("redirected.txt")]
+          assert nodes, "the redirected file is not in the graph"
+          assert any(f.git_blob_sha1 == want for f in nodes), (
+              f"recorded {[f.git_blob_sha1 for f in nodes]}, file hashes to {want}"
+          )
+          print(f"ok: {want[:12]} recorded for the redirected file")
+          PY
+
       - name: Trace a hardlink (A1 regression)
         run: |
           # A prebuilt object entering a tree through ln(1) has no open, read or
