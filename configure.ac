@@ -113,6 +113,7 @@ AC_CHECK_DECL([PTRACE_TRACEME],, AC_MSG_ERROR([cannot find PTRACE_TRACEME]), [#i
 AC_CHECK_DECL([SIGSTOP],, AC_MSG_ERROR([cannot find SIGSTOP]), [#include <sys/signal.h>])
 AC_CHECK_DECL([SIGTRAP],, AC_MSG_ERROR([cannot find SIGTRAP]), [#include <sys/signal.h>])
 AC_CHECK_DECL([SYS_clone], [AC_DEFINE([HAVE_SYS_CLONE], [1], [[Define if SYS_clone is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_clone3], [AC_DEFINE([HAVE_SYS_CLONE3], [1], [[Define if SYS_clone3 is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_close], [AC_DEFINE([HAVE_SYS_CLOSE], [1], [[Define if SYS_close is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_creat], [AC_DEFINE([HAVE_SYS_CREAT], [1], [[Define if SYS_creat is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([SYS_execve], [AC_DEFINE([HAVE_SYS_EXECVE], [1], [[Define if SYS_execve is available]])],, [#include <sys/syscall.h>])

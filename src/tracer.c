@@ -107,6 +107,7 @@ pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
     self->fds = malloc(self->finfo_size * sizeof (int));
     self->ignore_one_sigstop = ignore_one_sigstop;
     self->declared = 0;
+    self->is_thread = 0;
     self->coverage_gaps = 0;
 }
 
@@ -442,6 +443,61 @@ note_coverage_gap(PROCESS_INFO *pi, unsigned int bit, const char *kind)
     record_coverage_gap(pi->outname, kind);
 }
 
+// The thread group a tracee belongs to, or its own pid when that cannot be
+// read. A tid differing from the Tgid is a thread, not a process.
+static pid_t
+thread_group_of(pid_t pid)
+{
+    char path[64];
+    char line[256];
+    pid_t tgid = pid;
+
+    snprintf(path, sizeof path, "/proc/%d/status", pid);
+
+    FILE *status = fopen(path, "r");
+
+    if (status == NULL)
+	return tgid;
+
+    while (fgets(line, sizeof line, status) != NULL) {
+	if (!strncmp(line, "Tgid:", 5)) {
+	    tgid = (pid_t) strtol(line + 5, NULL, 10);
+	    break;
+	}
+    }
+
+    fclose(status);
+    return tgid;
+}
+
+/*
+ * Set up the bookkeeping for a tracee we have just met.
+ *
+ * A thread is not a process: it shares the address space and the descriptor
+ * table of its group leader, so a file the thread read, the process read.
+ * Giving each thread a subject of its own split one program's reads and writes
+ * across unrelated nodes, and nothing in the graph tied them back together:
+ * rustc reads a crate on one thread and writes the object on another, so 81
+ * objects in the fd build came out with no lineage at all, and 1286 of 5916
+ * process nodes had no parent. A thread therefore records under the leader's
+ * subject; its own syscall state stays separate, because that is genuinely
+ * per-thread.
+ */
+static void
+pinfo_new_tracee(PROCESS_INFO *self, pid_t pid, char ignore_one_sigstop)
+{
+    pid_t tgid = thread_group_of(pid);
+    PROCESS_INFO *leader = (tgid != pid) ? find_pinfo(tgid) : NULL;
+
+    pinfo_new(self, ignore_one_sigstop);
+
+    if (leader != NULL) {
+	memcpy(self->outname, leader->outname, sizeof self->outname);
+	self->declared = leader->declared;
+	self->is_thread = 1;
+    }
+}
+
 static void
 handle_create_process(PROCESS_INFO *pi, pid_t child)
 {
@@ -449,14 +505,20 @@ handle_create_process(PROCESS_INFO *pi, pid_t child)
 
     if (!child_pi) {
 	child_pi = next_pinfo(child);
-	pinfo_new(child_pi, 1);
+	pinfo_new_tracee(child_pi, child, 1);
     }
 
+    // A thread already is the process that made it: no second subject to
+    // declare, and no creation edge, which would otherwise claim a process
+    // created itself.
+    if (child_pi->is_thread)
+	return;
+
     // Declare the child here rather than waiting for it to exec. Forked workers
-    // that never exec (make and cargo use them, and every thread arrives this
-    // way) used to accumulate reads and writes under a subject that was never
-    // typed, so every consumer keying on `a b:process' dropped their edges
-    // silently: on a cargo build that was a third of all processes.
+    // that never exec (make and cargo use them) used to accumulate reads and
+    // writes under a subject that was never typed, so every consumer keying on
+    // `a b:process' dropped their edges silently: on a cargo build that was a
+    // third of all processes.
     if (!child_pi->declared) {
 	record_process_start(child, child_pi->outname, 1);
 	child_pi->declared = 1;
@@ -486,7 +548,10 @@ reap_process(pid_t pid)
 	record_hash(f->outname, f->hash);
     }
 
-    record_process_end(process_state->outname);
+    // A thread ending is not the process ending: the subject belongs to the
+    // group leader, and it is still running.
+    if (!process_state->is_thread)
+	record_process_end(process_state->outname);
 
     free(process_state->cmd_line);
     free(process_state->finfo);
@@ -734,6 +799,15 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    handle_create_process(pi, rval);
 	    break;
 #endif
+#ifdef HAVE_SYS_CLONE3
+	case SYS_clone3:
+	    // long clone3(struct clone_args *cl_args, size_t size);
+	    // glibc's pthread_create() uses this one, so without it thread
+	    // creation was invisible and every thread arrived as a tracee with
+	    // no parent.
+	    handle_create_process(pi, rval);
+	    break;
+#endif
 #ifdef HAVE_SYS_IO_URING_SETUP
 	case SYS_io_uring_setup:
 	    // int io_uring_setup(u32 entries, struct io_uring_params *p);
@@ -839,13 +913,16 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 			++running;
 			PROCESS_INFO *pi = next_pinfo(pid);
 
-			pinfo_new(pi, 0);
 			// A tracee we meet only at its first stop, without
 			// having seen the clone that made it. Declare it here
 			// for the same reason as at fork: otherwise its edges
-			// hang off a subject with no type.
-			record_process_start(pid, pi->outname, 1);
-			pi->declared = 1;
+			// hang off a subject with no type. Unless it is a
+			// thread, which records under its leader's subject.
+			pinfo_new_tracee(pi, pid, 0);
+			if (!pi->declared) {
+			    record_process_start(pid, pi->outname, 1);
+			    pi->declared = 1;
+			}
 		    }
 		    break;
 		case SIGTRAP:

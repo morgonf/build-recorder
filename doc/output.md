@@ -22,6 +22,14 @@ The special types and predicates used are listed below:
   are missing from the graph, so no completeness claim holds for this process.
   Emitted once per process and per mechanism.
 
+A process node is a process, not a thread. Threads share the address space and
+the descriptor table of their group leader, so a file a thread reads, the
+process read: every thread records under the leader's subject, and no `creates`
+edge is emitted for one. Giving each thread a subject of its own split a single
+program's reads and writes across unrelated nodes, which is how rustc, reading
+a crate on one thread and writing the object on another, produced objects with
+no lineage at all.
+
 
 
 #### File

@@ -58,6 +58,33 @@ jobs:
           print(f"ok: {len(g.procs)} processes, {len(g.files)} files")
           PY
 
+      - name: Trace one process with two threads (thread attribution)
+        run: |
+          # pthread_create goes through clone3.  Until that syscall recorded a
+          # child, every thread became a tracee with no parent and a subject of
+          # its own, so a program that reads on one thread and writes on
+          # another had its output attributed to a process that read nothing.
+          gcc -o threads examples/threads.c -lpthread
+          printf 'input line\n' > threads-input.txt
+          ./build-recorder -o threads.out ./threads
+          python - <<'PY'
+          from pathlib import Path
+          from brec.model import parse_out
+
+          g = parse_out(Path("threads.out"))
+          def paths(uris):
+              return {g.files[u].abspath for u in uris if u in g.files}
+
+          holders = [p for p in g.procs.values()
+                     if any(a.endswith("threads-input.txt") for a in paths(p.reads))
+                     and any(a.endswith("threads-output.o") for a in paths(p.writes))]
+          assert holders, (
+              "the thread's read and the thread's write are on different "
+              f"subjects: {[(p.uri, sorted(paths(p.reads))[:3], sorted(paths(p.writes))) for p in g.procs.values()]}"
+          )
+          print(f"ok: {holders[0].uri} carries both, {len(g.procs)} process node(s)")
+          PY
+
       - name: Trace a hardlink (A1 regression)
         run: |
           # A prebuilt object entering a tree through ln(1) has no open, read or
