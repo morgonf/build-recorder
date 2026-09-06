@@ -110,7 +110,7 @@ def test_findings_for_one_path_keep_graph_order(tmp_path):
 
     Findings are sorted by (verdict, artifact), so a path written more than once
     produces findings the sort cannot separate.  The sort is stable, so their
-    order is the order they were appended in — which came from iterating a set,
+    order is the order they were appended in, which came from iterating a set
     and so differed between runs: two runs of `brec verdict` over one trace
     disagreed about which piece of evidence belonged to which line.
     """

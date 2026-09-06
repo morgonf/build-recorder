@@ -74,8 +74,8 @@ class FileNode:
 class ProcessNode:
     uri: str
     pid: int
-    cmd: str
-    executable: Optional[str]
+    cmd: str                    # the last command line recorded for this pid
+    executable: Optional[str]   # the last program this process ran: its identity
     start: Optional[str]
     end: Optional[str]
     reads: list[str]
@@ -83,6 +83,11 @@ class ProcessNode:
     execs: list[str]          # uri ProcessNode
     role: Optional[str] = None
     renames: list[str] = field(default_factory=list)   # b:rename targets
+    # Every program the process ran, in trace order.  One pid can exec several
+    # times (sh -> gcc_wrapper -> gcc -> cc1), and the tracer records a
+    # b:executable for each; `executable` alone answers "what was this
+    # process", `executables` answers "what ran here".
+    executables: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +102,7 @@ class ProcessNode:
             "execs": list(self.execs),
             "role": self.role,
             "renames": list(self.renames),
+            "executables": list(self.executables),
         }
 
     @classmethod
@@ -113,6 +119,7 @@ class ProcessNode:
             execs=list(d.get("execs", [])),
             role=d.get("role"),
             renames=list(d.get("renames", [])),
+            executables=list(d.get("executables", [])),
         )
 
 

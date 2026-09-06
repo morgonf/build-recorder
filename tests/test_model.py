@@ -337,6 +337,35 @@ def test_rename_blank_node_without_a_target_is_dropped(tmp_path: Path) -> None:
     assert parse_out(out).procs[":p0"].renames == []
 
 
+# ── One process, several programs ────────────────────────────────────────────
+
+def test_every_executable_is_kept(tmp_path: Path) -> None:
+    """A pid that execs several times records a b:executable for each.
+
+    Keeping only the last one silently dropped a fifth of the exec facts in a
+    real trace, so tool-invocation counts came out far below what was recorded.
+    """
+    out = tmp_path / "execs.out"
+    out.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        "@prefix b: <http://build-recorder.org/rdf#> .\n"
+        ":fsh a b:file .\n:fsh b:abspath \"/bin/sh\" .\n"
+        ":fwrap a b:file .\n:fwrap b:abspath \"/usr/bin/gcc_wrapper\" .\n"
+        ":fcc1 a b:file .\n:fcc1 b:abspath \"/usr/libexec/cc1\" .\n"
+        ":p0 a b:process .\n"
+        ":p0 b:pid 1 .\n"
+        ":p0 b:cmd \"cc -c x.c\" .\n"
+        ":p0 b:executable :fsh .\n"
+        ":p0 b:executable :fwrap .\n"
+        ":p0 b:executable :fcc1 .\n",
+        encoding="utf-8",
+    )
+    proc = parse_out(out).procs[":p0"]
+    assert proc.executables == [":fsh", ":fwrap", ":fcc1"]
+    # ... and the process still has one identity: the program it ended up as.
+    assert proc.executable == ":fcc1"
+
+
 # ── Node order is the trace's order, and the same on every run ───────────────
 
 def test_nodes_keep_trace_order(tmp_path: Path) -> None:

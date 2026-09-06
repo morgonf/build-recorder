@@ -1,17 +1,14 @@
 """
 brec report — автономный анализатор файлов build-recorder.
 
-Читает .out файл (RDF Turtle), выполняет SPARQL-запросы через rdflib
-и выводит отчёт в консоль и/или сохраняет в Markdown-файл.
+Читает .out файл (RDF Turtle) через brec.model и выводит отчёт в консоль
+и/или сохраняет в Markdown-файл.
 
 Использование:
     brec report <file.out>
     brec report <file.out> --query stats
     brec report <file.out> --report [output.md]
     brec report <file.out> --report --quiet
-
-Зависимости:
-    pip3 install rdflib
 
 Запросы (--query):
     all        — все запросы (по умолчанию)
@@ -27,6 +24,11 @@ brec report — автономный анализатор файлов build-rec
     headers    — топ системных заголовков
     packages   — пакетные зависимости (требует `brec enrich`)
     report     — полный Markdown-отчёт
+
+Раньше эти запросы были SPARQL поверх rdflib. Сам SPARQL никуда не делся:
+рецепты для ad-hoc запросов лежат в USAGE.md, и rdflib для них по-прежнему
+годится. Здесь он не нужен: те же вопросы задаются к BuildGraph, который
+brec.model собирает из трассы за один проход, без внешних зависимостей.
 """
 
 from __future__ import annotations
@@ -36,18 +38,12 @@ import re
 import sys
 import time
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator, Optional
 
-# ── Пространства имён ─────────────────────────────────────────────────────────
-
-B   = "http://build-recorder.org/rdf#"
-D   = "http://build-recorder.org/data#"
-PFX = f"""
-PREFIX b:   <{B}>
-PREFIX :    <{D}>
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-"""
+from brec.ir import BuildGraph, FileNode, ProcessNode
+from brec.model import parse_out
 
 # ── Вспомогательные данные ────────────────────────────────────────────────────
 
@@ -104,19 +100,208 @@ PKG_ROLE = {
 
 # ── Загрузка графа ────────────────────────────────────────────────────────────
 
-def load_graph(path: Path) -> "rdflib.Graph":
-    # Imported here, not at module scope: rdflib is needed by this one command
-    # and by nothing else, so `brec verdict` must not fail when it is absent.
-    try:
-        import rdflib
-    except ImportError:
-        raise SystemExit("ERROR: rdflib не установлен. Выполните: pip3 install rdflib")
-    g = rdflib.Graph()
-    g.parse(str(path), format="turtle")
-    return g
+def load_graph(path: Path) -> BuildGraph:
+    return parse_out(path)
 
-def q(g: rdflib.Graph, query: str):
-    return list(g.query(PFX + query))
+
+# ── Вопросы к графу ───────────────────────────────────────────────────────────
+#
+# Ровно то, что раньше спрашивал SPARQL. Пары (процесс, файл) внутри одного
+# процесса дедуплицируются: в RDF повторная тройка `:p b:reads :f` это та же
+# тройка, а в списке ProcessNode.reads она лежит столько раз, сколько было
+# системных вызовов.
+
+def read_pairs(g: BuildGraph) -> Iterator[tuple[ProcessNode, FileNode]]:
+    for proc in g.procs.values():
+        for uri in dict.fromkeys(proc.reads):
+            node = g.files.get(uri)
+            if node is not None:
+                yield proc, node
+
+
+def write_pairs(g: BuildGraph) -> Iterator[tuple[ProcessNode, FileNode]]:
+    """Пары (процесс, произведённый им файл).
+
+    Произведённым считается и записанный (b:writes), и переименованный в это
+    имя (b:rename): `ar` собирает архив во временном файле и переименовывает
+    его на место, поэтому по одним b:writes итоговый артефакт в отчёт не
+    попадал, а попадал его временный предшественник. Так же на переименование
+    смотрят brec.classify и `brec verify`.
+    """
+    for proc in g.procs.values():
+        for uri in dict.fromkeys(list(proc.writes) + list(proc.renames)):
+            node = g.files.get(uri)
+            if node is not None:
+                yield proc, node
+
+
+def written_uris(g: BuildGraph) -> set[str]:
+    """Файлы, которые эта сборка произвела: записала или переименовала на место."""
+    return {
+        uri
+        for proc in g.procs.values()
+        for uri in list(proc.writes) + list(proc.renames)
+    }
+
+
+def executable_counts(g: BuildGraph) -> Counter:
+    """abspath запускавшегося файла → сколько раз его запускали.
+
+    Считаются все b:executable процесса, а не только последний: один pid
+    успевает сменить программу несколько раз (sh → gcc_wrapper → gcc → cc1),
+    и каждый такой запуск трассировщик записывает отдельной тройкой.
+    """
+    counts: Counter = Counter()
+    for proc in g.procs.values():
+        for uri in proc.executables:
+            node = g.files.get(uri)
+            if node is not None:
+                counts[node.abspath] += 1
+    return counts
+
+
+def by_count(counts) -> list[tuple[str, int]]:
+    """Убывание счётчика, ничьи по имени: порядок не должен зависеть от прогона."""
+    items = counts.items() if hasattr(counts, "items") else counts
+    return sorted(items, key=lambda kv: (-kv[1], kv[0]))
+
+
+_TS_FORMATS = ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S")
+
+
+def parse_ts(value: str) -> Optional[datetime]:
+    """Разобрать метку времени трассы, не падая на незнакомом формате.
+
+    Трассировщик пишет `...Z`, но фикстуры и чужие производители формата
+    встречаются и без него. Раньше на такой метке отчёт падал с ValueError.
+    """
+    for fmt in _TS_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def build_span(g: BuildGraph) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    """(начало, конец, длительность в секундах) по процессам, у которых есть обе метки."""
+    spans = [(p.start, p.end) for p in g.procs.values() if p.start and p.end]
+    if not spans:
+        return None, None, None
+    begin = min(s for s, _ in spans)
+    finish = max(e for _, e in spans)
+    t1, t2 = parse_ts(begin), parse_ts(finish)
+    seconds = int((t2 - t1).total_seconds()) if t1 and t2 else None
+    return begin, finish, seconds
+
+
+def source_ext_counts(g: BuildGraph) -> Counter:
+    exts = (".c", ".cpp", ".cc", ".inl", ".lua", ".py", ".js", ".ssjs", ".sh")
+    counts: Counter = Counter()
+    for _proc, node in read_pairs(g):
+        path = node.abspath
+        if "TryCompile" in path or not path.endswith(exts):
+            continue
+        counts[path.rsplit(".", 1)[-1]] += 1
+    return counts
+
+
+def project_sources(g: BuildGraph, dirs: tuple[str, ...]) -> list[str]:
+    """Прочитанные исходники проекта: .c/.cpp/.cc из сборочного дерева."""
+    found = {
+        node.abspath
+        for _proc, node in read_pairs(g)
+        if node.abspath.endswith((".c", ".cpp", ".cc"))
+        and not any(skip in node.abspath for skip in ("CMakeFiles", "TryCompile", "conftest"))
+        and any(d in node.abspath for d in dirs)
+    }
+    return sorted(found)
+
+
+def unwritten_executables(g: BuildGraph) -> list[str]:
+    written = written_uris(g)
+    return sorted({
+        node.abspath
+        for proc in g.procs.values()
+        for uri in proc.executables
+        if uri not in written
+        for node in (g.files.get(uri),) if node is not None
+    })
+
+
+def system_libs(g: BuildGraph) -> list[tuple[str, str]]:
+    """Системные .so, прочитанные, но не собранные здесь: (путь, хеш)."""
+    written = written_uris(g)
+    found = {
+        (node.abspath, node.git_blob_sha1)
+        for _proc, node in read_pairs(g)
+        if node.uri not in written
+        and node.abspath.startswith(("/usr/lib", "/lib"))
+        and ".so" in node.abspath
+    }
+    return sorted(found)
+
+
+def produced_paths(g: BuildGraph) -> list[str]:
+    found = {
+        node.abspath
+        for _proc, node in write_pairs(g)
+        if not node.abspath.startswith("/tmp")
+        and node.abspath != "/dev/null"
+        and "CMakeFiles" not in node.abspath
+        and "TryCompile" not in node.abspath
+    }
+    return sorted(found)
+
+
+def produced_libs(g: BuildGraph) -> list[tuple[str, str]]:
+    found = {
+        (node.abspath, node.git_blob_sha1)
+        for _proc, node in write_pairs(g)
+        if (".so" in node.abspath or node.abspath.endswith(".a"))
+        and not node.abspath.startswith("/tmp")
+        and "TryCompile" not in node.abspath
+    }
+    return sorted(found)
+
+
+def header_counts(g: BuildGraph) -> list[tuple[str, int]]:
+    counts: Counter = Counter()
+    for _proc, node in read_pairs(g):
+        if node.abspath.endswith(".h") and node.abspath.startswith("/usr/"):
+            counts[node.abspath] += 1
+    return by_count(counts)[:15]
+
+
+def process_roots(g: BuildGraph) -> list[ProcessNode]:
+    """Процессы, которых никто не порождал.
+
+    b:creates и b:execs brec.model держит в одном поле: трассировщик пишет
+    только creates (record_child в src/record.c), execs остался в онтологии от
+    апстрима. Если в трассе встретятся оба, здесь они сложатся.
+    """
+    children = {uri for proc in g.procs.values() for uri in proc.execs}
+    return [p for uri, p in g.procs.items() if uri not in children]
+
+
+def files_with_dep_type(g: BuildGraph) -> list[FileNode]:
+    return [f for f in g.files.values() if f.dep_type]
+
+
+def short(uri: str) -> str:
+    """:p12 в p12, как печатал URI SPARQL-вывод: без префикса."""
+    return uri.lstrip(":")
+
+
+def name_of(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def hash_or_dash(value: str, width: Optional[int] = None) -> str:
+    if not value:
+        return "—"
+    return value[:width] if width else value
+
 
 # ── Вывод в консоль ───────────────────────────────────────────────────────────
 
@@ -130,300 +315,163 @@ def trow(label: str, value, w: int = 30):
 
 # ── Запросы ───────────────────────────────────────────────────────────────────
 
-def stats(g: rdflib.Graph):
+def stats(g: BuildGraph):
     section("Обзор графа")
-    for label, query in [
-        ("Процессов",           "SELECT (COUNT(?p) AS ?n) WHERE { ?p a b:process }"),
-        ("Файлов",              "SELECT (COUNT(?f) AS ?n) WHERE { ?f a b:file }"),
-        ("Чтений (reads)",      "SELECT (COUNT(?r) AS ?n) WHERE { ?s b:reads ?r }"),
-        ("Записей (writes)",    "SELECT (COUNT(?w) AS ?n) WHERE { ?s b:writes ?w }"),
-        ("Переименований",      "SELECT (COUNT(?r) AS ?n) WHERE { ?s b:rename ?r }"),
-        ("Создано подпроцессов","SELECT (COUNT(?c) AS ?n) WHERE { ?s b:creates ?c }"),
-    ]:
-        trow(label, q(g, query)[0][0])
+    trow("Процессов",            len(g.procs))
+    trow("Файлов",               len(g.files))
+    trow("Чтений (reads)",       sum(len(set(p.reads)) for p in g.procs.values()))
+    trow("Записей (writes)",     sum(len(set(p.writes)) for p in g.procs.values()))
+    trow("Переименований",       sum(len(p.renames) for p in g.procs.values()))
+    trow("Создано подпроцессов", sum(len(set(p.execs)) for p in g.procs.values()))
 
 
-def timeline(g: rdflib.Graph):
+def timeline(g: BuildGraph):
     section("Временной диапазон сборки")
-    rows = q(g, """
-        SELECT (MIN(?s) AS ?begin) (MAX(?e) AS ?finish)
-        WHERE { ?p a b:process ; b:start ?s ; b:end ?e . }
-    """)
-    if rows and rows[0][0]:
-        t1 = datetime.strptime(str(rows[0][0]), "%Y-%m-%dT%H:%M:%SZ")
-        t2 = datetime.strptime(str(rows[0][1]), "%Y-%m-%dT%H:%M:%SZ")
-        trow("Начало",       rows[0][0])
-        trow("Конец",        rows[0][1])
-        trow("Длительность", f"{(t2 - t1).seconds} секунд")
+    begin, finish, seconds = build_span(g)
+    if begin is None:
+        return
+    trow("Начало", begin)
+    trow("Конец",  finish)
+    trow("Длительность", f"{seconds} секунд" if seconds is not None else "—")
 
 
-def languages(g: rdflib.Graph):
+def languages(g: BuildGraph):
     section("Языки программирования")
 
     print("\n  Компиляторы/интерпретаторы:")
-    rows = q(g, """
-        SELECT DISTINCT ?path (COUNT(?proc) AS ?n)
-        WHERE { ?proc a b:process ; b:executable ?exe . ?exe b:abspath ?path . }
-        GROUP BY ?path ORDER BY DESC(?n)
-    """)
-    for (path, n) in rows:
-        name = str(path).split('/')[-1]
-        print(f"  {int(n):5d}×  {name}")
+    for path, n in by_count(executable_counts(g)):
+        print(f"  {n:5d}×  {name_of(path)}")
 
     print("\n  Исходные файлы по расширению:")
-    rows2 = q(g, """
-        SELECT ?path
-        WHERE {
-            ?proc a b:process ; b:reads ?file . ?file b:abspath ?path .
-            FILTER(!CONTAINS(STR(?path), "TryCompile"))
-            FILTER(
-                STRENDS(STR(?path),".c")   || STRENDS(STR(?path),".cpp") ||
-                STRENDS(STR(?path),".cc")  || STRENDS(STR(?path),".inl") ||
-                STRENDS(STR(?path),".lua") || STRENDS(STR(?path),".py")  ||
-                STRENDS(STR(?path),".js")  || STRENDS(STR(?path),".ssjs")||
-                STRENDS(STR(?path),".sh")
-            )
-        }
-    """)
-    cnt = Counter(str(p).rsplit('.', 1)[-1] for (p,) in rows2)
-    for ext, n in cnt.most_common():
-        lang = EXT_LANG.get(ext, ext)
-        print(f"  {'.' + ext:<10} {n:4d} файлов  → {lang}")
+    for ext, n in source_ext_counts(g).most_common():
+        print(f"  {'.' + ext:<10} {n:4d} файлов  → {EXT_LANG.get(ext, ext)}")
 
 
-def tools(g: rdflib.Graph):
+def tools(g: BuildGraph):
     section("Инструменты и пакеты, задействованные в сборке")
-    rows = q(g, """
-        SELECT ?path (COUNT(?proc) AS ?n)
-        WHERE { ?proc a b:process ; b:executable ?exe . ?exe b:abspath ?path . }
-        GROUP BY ?path ORDER BY DESC(?n)
-    """)
     by_pkg: dict[str, int] = defaultdict(int)
     detail = []
-    for (path, n) in rows:
-        name = str(path).split('/')[-1]
+    for path, n in by_count(executable_counts(g)):
+        name = name_of(path)
         pkg = PKG_MAP.get(name, name)
-        by_pkg[pkg] += int(n)
-        detail.append((int(n), name, pkg))
+        by_pkg[pkg] += n
+        detail.append((n, name, pkg))
 
     print("\n  По пакетам:")
-    for pkg, total in sorted(by_pkg.items(), key=lambda x: -x[1]):
+    for pkg, total in by_count(by_pkg):
         print(f"  {total:5d}×  {pkg}")
 
     print("\n  Детально (утилита → пакет):")
-    for n, name, pkg in sorted(detail, key=lambda x: -x[0]):
+    for n, name, pkg in sorted(detail, key=lambda x: (-x[0], x[1])):
         print(f"  {n:5d}×  {name:<42} [{pkg}]")
 
 
-def externals(g: rdflib.Graph):
+def externals(g: BuildGraph):
     section("Готовые бинари: использованы, но не собраны в этом билде")
 
-    exes = q(g, """
-        SELECT DISTINCT ?path
-        WHERE {
-            ?proc b:executable ?file . ?file b:abspath ?path .
-            FILTER NOT EXISTS { ?any b:writes ?file }
-        }
-        ORDER BY ?path
-    """)
+    exes = unwritten_executables(g)
     print(f"\n  Запущенные исполняемые файлы ({len(exes)}):")
-    for (path,) in exes:
+    for path in exes:
         print(f"    {path}")
 
-    libs = q(g, """
-        SELECT DISTINCT ?path ?hash
-        WHERE {
-            ?proc b:reads ?file . ?file b:abspath ?path .
-            OPTIONAL { ?file b:hash ?hash }
-            FILTER NOT EXISTS { ?any b:writes ?file }
-            FILTER(STRSTARTS(STR(?path),"/usr/lib") || STRSTARTS(STR(?path),"/lib"))
-            FILTER(CONTAINS(STR(?path),".so"))
-        }
-        ORDER BY ?path
-    """)
-    print(f"\n  Системные .so библиотеки ({len(libs)}):")
-    for (path, hash_) in libs:
-        name = str(path).split('/')[-1]
-        h = str(hash_)[:16] if hash_ else '—'
-        print(f"    {name:<50} {h}")
+    libs_ = system_libs(g)
+    print(f"\n  Системные .so библиотеки ({len(libs_)}):")
+    for path, digest in libs_:
+        print(f"    {name_of(path):<50} {hash_or_dash(digest, 16)}")
 
 
-def sources(g: rdflib.Graph):
+def sources(g: BuildGraph):
     section("Исходники проекта, прочитанные при сборке")
-    rows = q(g, """
-        SELECT DISTINCT ?path
-        WHERE {
-            ?proc a b:process ; b:reads ?file . ?file b:abspath ?path .
-            FILTER(
-                STRENDS(STR(?path),".c")  || STRENDS(STR(?path),".cpp") ||
-                STRENDS(STR(?path),".cc")
-            )
-            FILTER(!CONTAINS(STR(?path), "CMakeFiles"))
-            FILTER(!CONTAINS(STR(?path), "TryCompile"))
-            FILTER(!CONTAINS(STR(?path), "conftest"))
-            FILTER(
-                CONTAINS(STR(?path), "/BUILD/") ||
-                CONTAINS(STR(?path), "/build/src/") ||
-                CONTAINS(STR(?path), "/src/")
-            )
-        }
-        ORDER BY ?path
-    """)
+    paths = project_sources(g, ("/BUILD/", "/build/src/", "/src/"))
     base = ""
-    for (path,) in rows:
-        p = str(path)
+    for path in paths:
         if not base:
-            m = re.search(r'/BUILD/[^/]+/|/build/src/', p)
-            base = p[:m.end()] if m else ""
-    print(f"\n  Всего: {len(rows)} файлов")
-    for (path,) in rows:
-        print(f"    {str(path).replace(base, '')}")
+            m = re.search(r'/BUILD/[^/]+/|/build/src/', path)
+            base = path[:m.end()] if m else ""
+    print(f"\n  Всего: {len(paths)} файлов")
+    for path in paths:
+        print(f"    {path.replace(base, '')}")
 
 
-def artifacts(g: rdflib.Graph):
+def artifacts(g: BuildGraph):
     section("Артефакты сборки (записанные файлы, не /tmp)")
-    rows = q(g, """
-        SELECT DISTINCT ?path
-        WHERE {
-            ?proc a b:process ; b:writes ?file . ?file b:abspath ?path .
-            FILTER(!STRSTARTS(STR(?path), "/tmp"))
-            FILTER(STR(?path) != "/dev/null")
-            FILTER(!CONTAINS(STR(?path), "CMakeFiles"))
-            FILTER(!CONTAINS(STR(?path), "TryCompile"))
-        }
-        ORDER BY ?path
-    """)
     by_ext: dict[str, list] = defaultdict(list)
-    for (path,) in rows:
-        fn = str(path).split('/')[-1]
+    for path in produced_paths(g):
+        fn = name_of(path)
         ext = fn.rsplit('.', 1)[-1] if '.' in fn else 'no-ext'
         by_ext[ext].append(fn)
     for ext in sorted(by_ext):
-        paths = by_ext[ext]
-        sample = ', '.join(paths[:3]) + (f' … (+{len(paths)-3})' if len(paths) > 3 else '')
-        trow(f".{ext} ({len(paths)})", sample, w=20)
+        names = by_ext[ext]
+        sample = ', '.join(names[:3]) + (f' … (+{len(names)-3})' if len(names) > 3 else '')
+        trow(f".{ext} ({len(names)})", sample, w=20)
 
 
-def libs(g: rdflib.Graph):
+def libs(g: BuildGraph):
     section("Библиотеки, собранные в ходе сборки (.so, .a)")
-    rows = q(g, """
-        SELECT DISTINCT ?path ?hash
-        WHERE {
-            ?proc a b:process ; b:writes ?file . ?file b:abspath ?path .
-            OPTIONAL { ?file b:hash ?hash }
-            FILTER(CONTAINS(STR(?path),".so") || STRENDS(STR(?path),".a"))
-            FILTER(!STRSTARTS(STR(?path),"/tmp"))
-            FILTER(!CONTAINS(STR(?path),"TryCompile"))
-        }
-        ORDER BY ?path
-    """)
-    for (path, hash_) in rows:
-        h = str(hash_)[:16] if hash_ else '—'
-        trow(str(path).split('/')[-1], f"hash: {h}", w=44)
+    for path, digest in produced_libs(g):
+        trow(name_of(path), f"hash: {hash_or_dash(digest, 16)}", w=44)
 
 
-def tree(g: rdflib.Graph):
+def tree(g: BuildGraph):
     section("Дерево процессов (2 уровня)")
-    roots = q(g, """
-        SELECT ?p WHERE {
-            ?p a b:process .
-            FILTER NOT EXISTS { ?parent b:creates ?p }
-        } LIMIT 5
-    """)
-    for (root,) in roots:
-        cmd_r = q(g, f"SELECT ?cmd WHERE {{ <{root}> b:cmd ?cmd }} LIMIT 1")
-        cmd = str(cmd_r[0][0])[:70] if cmd_r else "?"
-        rid = str(root).split('#')[-1]
-        children = q(g, f"""
-            SELECT ?child ?cmd WHERE {{
-                <{root}> b:creates ?child .
-                OPTIONAL {{ ?child b:cmd ?cmd }}
-            }}
-        """)
-        print(f"\n  {rid}: {cmd}")
-        for (child, ccmd) in children[:6]:
-            print(f"    └─ {str(child).split('#')[-1]}: {str(ccmd)[:65] if ccmd else '?'}")
+    for root in process_roots(g)[:5]:
+        print(f"\n  {short(root.uri)}: {root.cmd[:70] if root.cmd else '?'}")
+        children = [g.procs.get(uri) for uri in dict.fromkeys(root.execs)]
+        children = [c for c in children if c is not None]
+        for child in children[:6]:
+            print(f"    └─ {short(child.uri)}: {child.cmd[:65] if child.cmd else '?'}")
         if len(children) > 6:
             print(f"       … и ещё {len(children) - 6}")
 
 
-def packages(g: rdflib.Graph):
+def packages(g: BuildGraph):
     section("Пакетные зависимости (данные `brec enrich`)")
 
-    check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
-    if not check or int(check[0][0]) == 0:
+    enriched = files_with_dep_type(g)
+    if not enriched:
         print("\n  Данные о пакетах недоступны.")
         print("  Запустите: brec enrich <build.out> <rpm-dump.txt>")
         return
 
     print("\n  По типу зависимости:")
-    rows = q(g, """
-        SELECT ?dep_type (COUNT(DISTINCT ?file) AS ?n)
-        WHERE { ?file b:dep_type ?dep_type }
-        GROUP BY ?dep_type ORDER BY DESC(?n)
-    """)
-    for (dep_type, n) in rows:
-        trow(str(dep_type), n)
+    for dep_type, n in by_count(Counter(f.dep_type for f in enriched)):
+        trow(dep_type, n)
 
     print("\n  Пакеты, участвующие в сборке (по числу файлов):")
-    rows = q(g, """
-        SELECT ?rpm_name (COUNT(DISTINCT ?file) AS ?n)
-        WHERE { ?file b:rpm_name ?rpm_name }
-        GROUP BY ?rpm_name ORDER BY DESC(?n)
-    """)
-    for (name, n) in rows:
-        trow(str(name), f"{n} файлов", w=40)
+    pkg_counts = Counter(f.rpm_name for f in g.files.values() if f.rpm_name)
+    for name, n in by_count(pkg_counts):
+        trow(name, f"{n} файлов", w=40)
 
-    dyn = q(g, """
-        SELECT DISTINCT ?path ?rpm_name WHERE {
-            ?file b:abspath ?path ; b:dep_type "dynamic_lib" .
-            OPTIONAL { ?file b:rpm_name ?rpm_name }
-        } ORDER BY ?path
-    """)
+    dyn = sorted({(f.abspath, f.rpm_name) for f in enriched if f.dep_type == "dynamic_lib"})
     if dyn:
         print(f"\n  Динамические библиотеки .so ({len(dyn)}):")
-        for (path, name) in dyn:
-            pkg = str(name) if name else "—"
-            trow(str(path).split("/")[-1], f"[{pkg}]", w=44)
+        for path, pkg in dyn:
+            trow(name_of(path), f"[{pkg or '—'}]", w=44)
 
-    arc = q(g, """
-        SELECT DISTINCT ?path ?rpm_name WHERE {
-            ?file b:abspath ?path ; b:dep_type "static_archive" .
-            OPTIONAL { ?file b:rpm_name ?rpm_name }
-        } ORDER BY ?path
-    """)
+    arc = sorted({(f.abspath, f.rpm_name) for f in enriched if f.dep_type == "static_archive"})
     if arc:
         print(f"\n  Статические архивы .a ({len(arc)}):")
-        for (path, name) in arc:
-            pkg = str(name) if name else "—"
-            trow(str(path).split("/")[-1], f"[{pkg}]", w=44)
+        for path, pkg in arc:
+            trow(name_of(path), f"[{pkg or '—'}]", w=44)
 
 
-def headers(g: rdflib.Graph):
+def headers(g: BuildGraph):
     section("Наиболее читаемые системные заголовки")
-    rows = q(g, """
-        SELECT ?path (COUNT(?proc) AS ?n)
-        WHERE {
-            ?proc a b:process ; b:reads ?file . ?file b:abspath ?path .
-            FILTER(STRENDS(STR(?path),".h"))
-            FILTER(STRSTARTS(STR(?path),"/usr/"))
-        }
-        GROUP BY ?path ORDER BY DESC(?n) LIMIT 15
-    """)
-    for (path, n) in rows:
-        p = (str(path)
-             .replace("/usr/lib64/gcc/x86_64-alt-linux/13/", "<gcc>/")
-             .replace("/usr/include/", "<inc>/"))
-        trow(str(n), p, w=5)
+    for path, n in header_counts(g):
+        trow(str(n),
+             path.replace("/usr/lib64/gcc/x86_64-alt-linux/13/", "<gcc>/")
+                 .replace("/usr/include/", "<inc>/"),
+             w=5)
+
 
 # ── Генерация Markdown-отчёта ─────────────────────────────────────────────────
 
-def generate_report(g: rdflib.Graph, src_path: Path) -> str:
+def generate_report(g: BuildGraph, src_path: Path) -> str:
     lines = []
     W = lines.append
 
     pkg_name = src_path.stem.replace('-build', '')
-    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
     W(f"# Build Report: {pkg_name}")
     W(f"\nСгенерировано: {now}  ")
@@ -431,201 +479,109 @@ def generate_report(g: rdflib.Graph, src_path: Path) -> str:
 
     # ── Summary ──
     W("## Обзор\n")
-    counts = {}
-    for key, query in [
-        ("processes", "SELECT (COUNT(?p) AS ?n) WHERE { ?p a b:process }"),
-        ("files",     "SELECT (COUNT(?f) AS ?n) WHERE { ?f a b:file }"),
-        ("reads",     "SELECT (COUNT(?r) AS ?n) WHERE { ?s b:reads ?r }"),
-        ("writes",    "SELECT (COUNT(?w) AS ?n) WHERE { ?s b:writes ?w }"),
-        ("creates",   "SELECT (COUNT(?c) AS ?n) WHERE { ?s b:creates ?c }"),
-    ]:
-        counts[key] = int(q(g, query)[0][0])
-
-    ts = q(g, """
-        SELECT (MIN(?s) AS ?begin) (MAX(?e) AS ?finish)
-        WHERE { ?p a b:process ; b:start ?s ; b:end ?e . }
-    """)
-    duration = "?"
-    if ts and ts[0][0]:
-        t1 = datetime.strptime(str(ts[0][0]), "%Y-%m-%dT%H:%M:%SZ")
-        t2 = datetime.strptime(str(ts[0][1]), "%Y-%m-%dT%H:%M:%SZ")
-        duration = f"{(t2 - t1).seconds} сек ({ts[0][0]} → {ts[0][1]})"
+    begin, finish, seconds = build_span(g)
+    duration = f"{seconds} сек ({begin} → {finish})" if seconds is not None else "?"
 
     W("| Метрика | Значение |")
     W("|---------|---------|")
-    W(f"| Процессов | {counts['processes']} |")
-    W(f"| Файлов | {counts['files']} |")
-    W(f"| Чтений (reads) | {counts['reads']} |")
-    W(f"| Записей (writes) | {counts['writes']} |")
-    W(f"| Создано подпроцессов | {counts['creates']} |")
+    W(f"| Процессов | {len(g.procs)} |")
+    W(f"| Файлов | {len(g.files)} |")
+    W(f"| Чтений (reads) | {sum(len(set(p.reads)) for p in g.procs.values())} |")
+    W(f"| Записей (writes) | {sum(len(set(p.writes)) for p in g.procs.values())} |")
+    W(f"| Создано подпроцессов | {sum(len(set(p.execs)) for p in g.procs.values())} |")
     W(f"| Длительность | {duration} |")
 
     # ── Languages ──
     W("\n## Языки программирования\n")
-    src_rows = q(g, """
-        SELECT ?path WHERE {
-            ?proc a b:process ; b:reads ?file . ?file b:abspath ?path .
-            FILTER(!CONTAINS(STR(?path),"TryCompile"))
-            FILTER(
-                STRENDS(STR(?path),".c")   || STRENDS(STR(?path),".cpp") ||
-                STRENDS(STR(?path),".cc")  || STRENDS(STR(?path),".inl") ||
-                STRENDS(STR(?path),".lua") || STRENDS(STR(?path),".py")  ||
-                STRENDS(STR(?path),".js")  || STRENDS(STR(?path),".ssjs")||
-                STRENDS(STR(?path),".sh")
-            )
-        }
-    """)
-    cnt = Counter(str(p).rsplit('.', 1)[-1] for (p,) in src_rows)
     W("| Расширение | Файлов | Язык |")
     W("|-----------|--------|------|")
-    for ext, n in cnt.most_common():
+    for ext, n in source_ext_counts(g).most_common():
         W(f"| `.{ext}` | {n} | {EXT_LANG.get(ext, ext)} |")
 
     # ── Source files ──
     W("\n## Исходники проекта\n")
-    proj_src = q(g, """
-        SELECT DISTINCT ?path WHERE {
-            ?proc a b:process ; b:reads ?file . ?file b:abspath ?path .
-            FILTER(STRENDS(STR(?path),".c") || STRENDS(STR(?path),".cpp") || STRENDS(STR(?path),".cc"))
-            FILTER(CONTAINS(STR(?path),"/BUILD/"))
-            FILTER(!CONTAINS(STR(?path),"CMakeFiles"))
-            FILTER(!CONTAINS(STR(?path),"TryCompile"))
-        }
-        ORDER BY ?path
-    """)
+    proj_src = project_sources(g, ("/BUILD/",))
     base = ""
-    for (path,) in proj_src:
-        p = str(path)
+    for path in proj_src:
         if not base:
-            m = re.search(r'/BUILD/[^/]+/', p)
-            base = p[:m.end()] if m else ""
+            m = re.search(r'/BUILD/[^/]+/', path)
+            base = path[:m.end()] if m else ""
     W(f"Всего: **{len(proj_src)}** файлов\n")
-    for (path,) in proj_src:
-        W(f"- `{str(path).replace(base, '')}`")
+    for path in proj_src:
+        W(f"- `{path.replace(base, '')}`")
 
     # ── Build tools ──
     W("\n## Инструменты сборки\n")
-    tool_rows = q(g, """
-        SELECT ?path (COUNT(?proc) AS ?n)
-        WHERE { ?proc a b:process ; b:executable ?exe . ?exe b:abspath ?path . }
-        GROUP BY ?path ORDER BY DESC(?n)
-    """)
     by_pkg: dict[str, int] = defaultdict(int)
-    for (path, n) in tool_rows:
-        name = str(path).split('/')[-1]
-        by_pkg[PKG_MAP.get(name, name)] += int(n)
+    for path, n in executable_counts(g).items():
+        by_pkg[PKG_MAP.get(name_of(path), name_of(path))] += n
 
     W("| Пакет | Инвокаций | Роль |")
     W("|-------|----------|------|")
-    for pkg, total in sorted(by_pkg.items(), key=lambda x: -x[1]):
+    for pkg, total in by_count(by_pkg):
         W(f"| `{pkg}` | {total} | {PKG_ROLE.get(pkg, '—')} |")
 
     # ── External binaries ──
     W("\n## Внешние бинарные зависимости\n")
     W("Файлы, **использованные** в сборке, но **не созданные** в ней.\n")
 
-    exes = q(g, """
-        SELECT DISTINCT ?path WHERE {
-            ?proc b:executable ?file . ?file b:abspath ?path .
-            FILTER NOT EXISTS { ?any b:writes ?file }
-        }
-        ORDER BY ?path
-    """)
+    exes = unwritten_executables(g)
     W(f"### Исполняемые файлы ({len(exes)})\n")
-    for (path,) in exes:
+    for path in exes:
         W(f"- `{path}`")
 
-    syslibs = q(g, """
-        SELECT DISTINCT ?path ?hash WHERE {
-            ?proc b:reads ?file . ?file b:abspath ?path .
-            OPTIONAL { ?file b:hash ?hash }
-            FILTER NOT EXISTS { ?any b:writes ?file }
-            FILTER(STRSTARTS(STR(?path),"/usr/lib") || STRSTARTS(STR(?path),"/lib"))
-            FILTER(CONTAINS(STR(?path),".so"))
-        }
-        ORDER BY ?path
-    """)
+    syslibs = system_libs(g)
     W(f"\n### Системные .so библиотеки ({len(syslibs)})\n")
     W("| Библиотека | SHA1 (git-compatible) |")
     W("|-----------|----------------------|")
-    for (path, hash_) in syslibs:
-        h = str(hash_) if hash_ else '—'
-        W(f"| `{str(path).split('/')[-1]}` | `{h}` |")
+    for path, digest in syslibs:
+        W(f"| `{name_of(path)}` | `{hash_or_dash(digest)}` |")
 
     # ── Produced libs ──
-    lib_rows = q(g, """
-        SELECT DISTINCT ?path ?hash WHERE {
-            ?proc a b:process ; b:writes ?file . ?file b:abspath ?path .
-            OPTIONAL { ?file b:hash ?hash }
-            FILTER(CONTAINS(STR(?path),".so") || STRENDS(STR(?path),".a"))
-            FILTER(!STRSTARTS(STR(?path),"/tmp"))
-            FILTER(!CONTAINS(STR(?path),"TryCompile"))
-        }
-        ORDER BY ?path
-    """)
+    lib_rows = produced_libs(g)
     if lib_rows:
         W("\n## Собранные библиотеки\n")
         W("| Библиотека | SHA1 |")
         W("|-----------|------|")
-        for (path, hash_) in lib_rows:
-            h = str(hash_) if hash_ else '—'
-            W(f"| `{str(path).split('/')[-1]}` | `{h}` |")
+        for path, digest in lib_rows:
+            W(f"| `{name_of(path)}` | `{hash_or_dash(digest)}` |")
 
     # ── Package provenance (if `brec enrich` was run) ──
-    pkg_check = q(g, "SELECT (COUNT(?f) AS ?n) WHERE { ?f b:dep_type ?t }")
-    if pkg_check and int(pkg_check[0][0]) > 0:
+    enriched = files_with_dep_type(g)
+    if enriched:
         W("\n## Пакетные зависимости\n")
         W("*Данные добавлены `brec enrich` на основе RPM-базы контейнера.*\n")
 
-        dep_rows = q(g, """
-            SELECT ?dep_type (COUNT(DISTINCT ?file) AS ?n)
-            WHERE { ?file b:dep_type ?dep_type }
-            GROUP BY ?dep_type ORDER BY DESC(?n)
-        """)
         W("### По типу зависимости\n")
         W("| Тип | Файлов |")
         W("|-----|--------|")
-        for (dep_type, n) in dep_rows:
+        for dep_type, n in by_count(Counter(f.dep_type for f in enriched)):
             W(f"| `{dep_type}` | {n} |")
 
-        pkg_rows = q(g, """
-            SELECT ?rpm_name (COUNT(DISTINCT ?file) AS ?n)
-            WHERE { ?file b:rpm_name ?rpm_name }
-            GROUP BY ?rpm_name ORDER BY DESC(?n)
-        """)
         W("\n### Пакеты\n")
         W("| Пакет | Файлов |")
         W("|-------|--------|")
-        for (name, n) in pkg_rows:
+        pkg_counts = Counter(f.rpm_name for f in g.files.values() if f.rpm_name)
+        for name, n in by_count(pkg_counts):
             W(f"| `{name}` | {n} |")
 
-        dyn_rows = q(g, """
-            SELECT DISTINCT ?path ?rpm_name WHERE {
-                ?file b:abspath ?path ; b:dep_type "dynamic_lib" .
-                OPTIONAL { ?file b:rpm_name ?rpm_name }
-            } ORDER BY ?path
-        """)
+        dyn_rows = sorted({(f.abspath, f.rpm_name) for f in enriched
+                           if f.dep_type == "dynamic_lib"})
         if dyn_rows:
             W(f"\n### Динамические библиотеки ({len(dyn_rows)})\n")
             W("| Библиотека | Пакет |")
             W("|-----------|-------|")
-            for (path, name) in dyn_rows:
-                pkg = str(name) if name else "—"
-                W(f"| `{str(path).split('/')[-1]}` | `{pkg}` |")
+            for path, pkg in dyn_rows:
+                W(f"| `{name_of(path)}` | `{pkg or '—'}` |")
 
-        arc_rows = q(g, """
-            SELECT DISTINCT ?path ?rpm_name WHERE {
-                ?file b:abspath ?path ; b:dep_type "static_archive" .
-                OPTIONAL { ?file b:rpm_name ?rpm_name }
-            } ORDER BY ?path
-        """)
+        arc_rows = sorted({(f.abspath, f.rpm_name) for f in enriched
+                           if f.dep_type == "static_archive"})
         if arc_rows:
             W(f"\n### Статические архивы ({len(arc_rows)})\n")
             W("| Архив | Пакет |")
             W("|-------|-------|")
-            for (path, name) in arc_rows:
-                pkg = str(name) if name else "—"
-                W(f"| `{str(path).split('/')[-1]}` | `{pkg}` |")
+            for path, pkg in arc_rows:
+                W(f"| `{name_of(path)}` | `{pkg or '—'}` |")
 
     W("\n---\n")
     W(f"*Отчёт сгенерирован `brec report` на основе данных `build-recorder`*")
@@ -646,6 +602,7 @@ AVAILABLE = {
     "headers":   headers,
     "packages":  packages,
 }
+
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("file", help="Путь к .out файлу build-recorder")
@@ -675,7 +632,8 @@ def run(args) -> int:
     print(f"Загрузка {path.name} ...", end=" ", flush=True)
     t0 = time.time()
     g = load_graph(path)
-    print(f"{len(g)} троек за {time.time() - t0:.1f}с")
+    print(f"{len(g.procs)} процессов, {len(g.files)} файлов "
+          f"за {time.time() - t0:.1f}с")
 
     if args.report is not None:
         md = generate_report(g, path)

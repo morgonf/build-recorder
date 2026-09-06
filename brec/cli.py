@@ -13,8 +13,8 @@ block and its own answer to "where is the graph".  They are subcommands now:
 Run as ``python3 -m brec <command>``, or as ``brec <command>`` once installed.
 
 Every command module is imported to build the parser, so they must stay cheap
-to import; rdflib is pulled in only when `brec report` actually loads a graph,
-which is why a missing rdflib breaks that one command and not the CLI.
+to import.  None of them reaches outside the standard library: the whole CLI
+reads the trace through brec.model.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "buildreq": ("brec.commands.buildreq",
                  "declared BuildRequires vs the packages actually read"),
     "report": ("brec.commands.report",
-               "SPARQL summary of a trace (requires rdflib)"),
+               "summary of a trace: processes, languages, artifacts"),
 }
 
 

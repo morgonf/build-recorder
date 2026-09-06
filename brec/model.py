@@ -25,7 +25,7 @@ _STR_RE = re.compile(
 # Flat integer property:  :X b:prop 123 [.;]
 _INT_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+(\d+)\s*[.;]")
 
-# Flat URI relationship:  :X b:pred :Y [.;]  — the object may be a blank node,
+# Flat URI relationship:  :X b:pred :Y [.;].  The object may be a blank node,
 # which is how the tracer writes a rename (see _BNODE_RE below).
 _URI_RE = re.compile(r"^(:[a-zA-Z_]\w*)\s+b:(\w+)\s+((?::[a-zA-Z_]|_:)\w*)\s*[.;]")
 
@@ -156,6 +156,7 @@ def parse_out(path: Path) -> BuildGraph:
             d.setdefault("renames", []).append(obj)
         elif pred == "executable":
             d["executable"] = obj
+            d.setdefault("executables", []).append(obj)
 
     # ── Line-by-line scan ─────────────────────────────────────────────────────
 
@@ -306,6 +307,7 @@ def parse_out(path: Path) -> BuildGraph:
             writes=list(d.get("writes", [])),
             execs=list(d.get("execs", [])),
             renames=_rename_targets(d.get("renames", [])),
+            executables=list(d.get("executables", [])),
             role=None,
         )
 
