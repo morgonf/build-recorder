@@ -2,7 +2,7 @@
 # was made from source, with no prebuilt binary incorporated.
 #
 #   include:
-#     - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc1
+#     - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc2
 #       inputs:
 #         build_job: build
 #   build:
@@ -36,6 +36,11 @@ spec:
       options: [grey, red]
       description: >
         grey fails on anything not proven clean; red only on a proven prebuilt
+    analyze_args:
+      default: ""
+      description: >
+        extra options for brec analyze, e.g. --strict (no exemption for the
+        toolchain runtime) or --allow '/opt/sdk/*'
     stage:
       default: test
     tags:
@@ -48,7 +53,7 @@ spec:
     version:
       # Kept equal to the tag by the release job: the binaries downloaded are
       # the ones built from this very template's commit.
-      default: 1.1.0-rc1
+      default: 1.1.0-rc2
     project:
       default: a.kuznetcov/build-recorder
 ---
@@ -114,7 +119,7 @@ brec-verdict-$[[ inputs.build_job ]]:
                   with open(os.path.join("/tmp/brec-py", m.name), "wb") as fh:
                       fh.write(tar.extractfile(m).read())
       PY
-    - PYTHONPATH=/tmp/brec-py python3 -m brec analyze "$[[ inputs.bundle ]]" --fail-on $[[ inputs.fail_on ]] --json brec-verdict.json
+    - PYTHONPATH=/tmp/brec-py python3 -m brec analyze "$[[ inputs.bundle ]]" --fail-on $[[ inputs.fail_on ]] $[[ inputs.analyze_args ]] --json brec-verdict.json
   artifacts:
     when: always
     paths:

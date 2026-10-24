@@ -317,11 +317,12 @@ brec analyze bundle.tar.gz --fail-on red        # GREY не валит шаг
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc1
+  - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc2
     inputs:
       build_job: build          # обязательный
       # bundle: brec-bundle.tar.gz
       # fail_on: grey           # или red
+      # analyze_args: --strict  # или --allow '/opt/sdk/*'
       # stage: test
       # tags: [docker]
 
