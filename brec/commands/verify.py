@@ -41,12 +41,29 @@ from brec.ir import BuildGraph, FileNode
 # Report-level questions asked of a brec.ir.FileNode.  The graph itself is
 # brec's; only the wording of the report lives here.
 
+# What the report calls a distribution package: "RPM" or "deb", set by run()
+# from the graph.  The predicates below used to read the rpm_* fields only, so
+# a dpkg-attributed trace reported every system header as project source.
+PKG = "RPM"
+_PKG_ID = "NEVRA"
+
+
 def is_from_rpm(f: FileNode) -> bool:
-    return bool(f.rpm_name)
+    """From a distribution package (rpm or dpkg; the name predates dpkg)."""
+    return bool(f.rpm_name or f.pkg_name)
+
+
+def package_id(f: FileNode) -> str:
+    """The owning package as the report shows it: NEVRA, or name=version for deb."""
+    if f.rpm_nevra:
+        return f.rpm_nevra
+    if f.pkg_name:
+        return f"{f.pkg_name}={f.pkg_version}" if f.pkg_version else f.pkg_name
+    return ""
 
 
 def is_project_source(f: FileNode) -> bool:
-    return f.dep_type == "project_source" and not f.rpm_name
+    return f.dep_type == "project_source" and not is_from_rpm(f)
 
 
 def is_vendored(f: FileNode) -> bool:
@@ -54,10 +71,10 @@ def is_vendored(f: FileNode) -> bool:
 
 
 def provenance(f: FileNode) -> str:
-    if f.rpm_nevra:
-        return f.rpm_nevra
+    if is_from_rpm(f):
+        return package_id(f)
     if is_vendored(f):
-        return "VENDORED (not from any RPM)"
+        return f"VENDORED (not from any {PKG})"
     if is_project_source(f):
         return "project source"
     return "unknown"
@@ -155,7 +172,7 @@ def analyze(graph: BuildGraph) -> BuildDeps:
 def _group_by_package(files: list[FileNode]) -> dict[str, list[FileNode]]:
     groups: dict[str, list[FileNode]] = defaultdict(list)
     for f in files:
-        key = f.rpm_nevra or ("VENDORED" if is_vendored(f) else "PROJECT_SOURCE")
+        key = package_id(f) or ("VENDORED" if is_vendored(f) else "PROJECT_SOURCE")
         groups[key].append(f)
     return dict(sorted(groups.items(), key=lambda x: (-len(x[1]), x[0])))
 
@@ -199,7 +216,7 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
         print(f"\n  Source files: {len(deps.static_sources)} total  "
               f"({len(own_src)} project, {len(vendored)} vendored)\n")
         if vendored:
-            print(f"  ⚠  Vendored source (no RPM provenance — {len(vendored)} files):")
+            print(f"  ⚠  Vendored source (no {PKG} provenance — {len(vendored)} files):")
             by_dir: dict[str, list] = defaultdict(list)
             for f in vendored:
                 # Group by vendor subdirectory
@@ -222,7 +239,7 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
         print()
         by_pkg: dict[str, list[FileNode]] = defaultdict(list)
         for f in deps.dynamic_libs:
-            by_pkg[f.rpm_nevra or "— (path not in RPM dump)"].append(f)
+            by_pkg[package_id(f) or f"— (path not in {PKG} dump)"].append(f)
         for nevra, libs in sorted(by_pkg.items(), key=lambda x: x[0]):
             status = "✓" if is_from_rpm(libs[0]) else "?"
             for lib in sorted(libs, key=lambda f: f.name):
@@ -260,12 +277,12 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
 
     print(f"""
   Static inputs:
-    ✓ From RPM packages (headers + archives)  {rpm_verified:6d}
+    ✓ From {PKG} packages (headers + archives)  {rpm_verified:6d}
     · Project own source                      {project_src:6d}
-    ⚠ Vendored source (no RPM provenance)     {vendored:6d}
+    ⚠ Vendored source (no {PKG} provenance)     {vendored:6d}
 
   Dynamic (runtime) links:
-    ✓ From RPM packages                       {dynamic_rpm:6d}
+    ✓ From {PKG} packages                       {dynamic_rpm:6d}
     ✗ Not from any package                    {dynamic_unk:6d}
 
   Build artifacts produced:                   {len(set(f.name for f in deps.artifacts)):6d}
@@ -276,7 +293,7 @@ def print_report(deps: BuildDeps, files: dict[str, FileNode], pkg_name: str,
     if dynamic_unk > 0:
         print("  ✗  Unattributed runtime libraries detected.\n")
     if vendored == 0 and dynamic_unk == 0:
-        print("  ✓  All build inputs attributed to known RPM packages or project source.\n")
+        print(f"  ✓  All build inputs attributed to known {PKG} packages or project source.\n")
 
     # ── Upstream verification results ─────────────────────────────────────────
     if upstream:
@@ -314,20 +331,20 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
     W("## Summary\n")
     W("| Category | Files | Status |")
     W("|---|---|---|")
-    W(f"| Static: from RPM packages | {rpm_static} | ✓ provenance verified |")
+    W(f"| Static: from {PKG} packages | {rpm_static} | ✓ provenance verified |")
     W(f"| Static: project own source | {own_src} | · project code |")
-    W(f"| Static: vendored (no RPM) | {vendored} | {'⚠ needs manual review' if vendored else '—'} |")
-    W(f"| Dynamic: from RPM packages | {dyn_rpm} | ✓ provenance verified |")
+    W(f"| Static: vendored (no {PKG}) | {vendored} | {'⚠ needs manual review' if vendored else '—'} |")
+    W(f"| Dynamic: from {PKG} packages | {dyn_rpm} | ✓ provenance verified |")
     W(f"| Dynamic: unattributed | {dyn_unk} | {'✗ unknown origin' if dyn_unk else '—'} |")
     W(f"| Build artifacts produced | {len(set(f.name for f in deps.artifacts))} | |")
 
     # Static headers by package
     W("\n## Static Dependencies (compiled into binary)\n")
     W("### Headers by package\n")
-    W("| Package (NEVRA) | Files | Verified |")
+    W(f"| Package ({_PKG_ID}) | Files | Verified |")
     W("|---|---|---|")
     for nevra, grp in _group_by_package(deps.static_headers).items():
-        ok = "✓" if is_from_rpm(grp[0]) else "⚠ no RPM"
+        ok = "✓" if is_from_rpm(grp[0]) else f"⚠ no {PKG}"
         W(f"| `{nevra}` | {len(grp)} | {ok} |")
 
     # Static archives
@@ -341,14 +358,14 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
                 continue
             seen.add(f.name)
             ok = "✓" if is_from_rpm(f) else "⚠"
-            W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
+            W(f"| `{f.name}` | `{package_id(f) or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
 
     # Vendored source
     vendored_files = [f for f in deps.static_sources if is_vendored(f)]
     if vendored_files:
-        W("\n### ⚠ Vendored source (not from any RPM package)\n")
+        W(f"\n### ⚠ Vendored source (not from any {PKG} package)\n")
         W("These files are compiled directly from third-party source code "
-          "bundled in the project repository. They carry no RPM provenance "
+          f"bundled in the project repository. They carry no {PKG} provenance "
           "and must be reviewed manually against upstream releases.\n")
         W("| File | Directory | SHA-1 (git) |")
         W("|---|---|---|")
@@ -358,11 +375,11 @@ def make_markdown(deps: BuildDeps, files: dict[str, FileNode],
 
     # Dynamic libs
     W("\n## Dynamic Dependencies (loaded at runtime)\n")
-    W("| Library | Package (NEVRA) | SHA-1 (git) | Verified |")
+    W(f"| Library | Package ({_PKG_ID}) | SHA-1 (git) | Verified |")
     W("|---|---|---|---|")
     for f in sorted(deps.dynamic_libs, key=lambda x: x.name):
         ok = "✓" if is_from_rpm(f) else "✗ unknown"
-        W(f"| `{f.name}` | `{f.rpm_nevra or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
+        W(f"| `{f.name}` | `{package_id(f) or '—'}` | `{f.git_blob_sha1[:16] or '—'}` | {ok} |")
 
     # Artifacts
     W("\n## Build Artifacts\n")
@@ -740,6 +757,11 @@ def run(args) -> int:
     graph = load_graph(out_path, args.provenance)
     files = graph.files
     print(f"{len(files)} files, {len(graph.procs)} processes")
+
+    global PKG, _PKG_ID
+    backends = {f.pkg_backend for f in files.values() if f.pkg_backend}
+    if backends == {"dpkg"}:
+        PKG, _PKG_ID = "deb", "name=version"
 
     print("Analysing dependency graph ...", end=" ", flush=True)
     deps = analyze(graph)

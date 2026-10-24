@@ -39,7 +39,8 @@ from pathlib import Path
 
 from brec.model import parse_out
 from brec.provenance import sidecar
-from brec.provenance.rpm import RpmBackend
+from brec.provenance.dpkg import DpkgBackend
+from brec.provenance.registry import detect_backends
 
 # Текст, которым старая версия помечала вписанный в .out блок. Пишущего кода
 # больше нет, но узнавать такие трассы надо: их данные и sidecar могут спорить.
@@ -77,7 +78,11 @@ def print_stats(doc) -> None:
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", help="Path to build-recorder .out (RDF Turtle)")
-    ap.add_argument("rpm_dump", help="Path to rpm-dump.txt (path<TAB>name<TAB>nevra)")
+    ap.add_argument("rpm_dump", metavar="pkg_dump",
+                    help="package dump, path<TAB>name<TAB>full-version: rpm-dump.txt, "
+                         "or brec-collect's packages.tsv (rpm or dpkg)")
+    ap.add_argument("--distro", metavar="ID",
+                    help="os-release ID for dpkg purls (pkg:deb/<ID>/...), default debian")
     ap.add_argument(
         "-o", "--output", metavar="FILE.provenance.json",
         help="Where to write the sidecar (default: next to the trace)",
@@ -107,10 +112,16 @@ def run(args) -> int:
             file=sys.stderr,
         )
 
-    print(f"Loading RPM dump from {rpm_dump} ...", end=" ", flush=True)
-    backend = RpmBackend()
-    backend.build_index(rpm_dump)
-    print(f"{len(backend.index_as_dict())} file-package mappings")
+    print(f"Loading package dump from {rpm_dump} ...", end=" ", flush=True)
+    found = detect_backends(rpm_dump)
+    if not found:
+        print()
+        print(f"ERROR: {rpm_dump} is neither an rpm nor a dpkg dump", file=sys.stderr)
+        return 1
+    backend = found[0]
+    if isinstance(backend, DpkgBackend) and args.distro:
+        backend.namespace = args.distro
+    print(f"{backend.name}, {len(backend.index_as_dict())} file-package mappings")
 
     print(f"Scanning file nodes in {out_file} ...", end=" ", flush=True)
     graph = parse_out(out_file)

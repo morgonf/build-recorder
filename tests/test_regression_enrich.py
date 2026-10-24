@@ -44,10 +44,11 @@ def test_enrich_has_no_classify_dep_type() -> None:
     assert "def classify_dep_type" not in src, "classify_dep_type still defined in brec/commands/enrich.py"
 
 
-def test_enrich_uses_rpm_backend() -> None:
-    """`brec enrich` must import and use RpmBackend from brec."""
+def test_enrich_uses_the_backend_registry() -> None:
+    """`brec enrich` takes its backend from brec, chosen by the dump's contents
+    (rpm or dpkg), instead of loading the dump itself."""
     src = _ENRICH_PATH.read_text(encoding="utf-8")
-    assert "RpmBackend" in src, "RpmBackend not found in brec/commands/enrich.py"
+    assert "detect_backends" in src, "brec/commands/enrich.py does not use the registry"
 
 
 def test_dep_type_classification_is_not_reimplemented() -> None:
