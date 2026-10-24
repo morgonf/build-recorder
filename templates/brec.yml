@@ -1,0 +1,122 @@
+# build-recorder as a GitLab CI/CD component: a verdict on whether a build
+# was made from source, with no prebuilt binary incorporated.
+#
+#   include:
+#     - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc1
+#       inputs:
+#         build_job: build
+#   build:
+#     before_script:
+#       - !reference [.brec-setup, script]
+#     script:
+#       - brec-collect -o brec-bundle.tar.gz --payload dist -- make install DESTDIR=$PWD/dist
+#     artifacts:
+#       when: always
+#       paths: [brec-bundle.tar.gz]
+#
+# The component cannot wrap someone else's build command, so the build job
+# says `brec-collect ... --` itself; everything else is here.  .brec-setup puts
+# a static build-recorder and brec-collect on PATH (any glibc or musl image,
+# curl or wget needed); brec-verdict-<build_job> runs `brec analyze` on the
+# bundle in its own image and fails the pipeline by the verdict.
+#
+# The project is private: a consuming project has to be on the job token
+# allowlist of a.kuznetcov/build-recorder (Settings → CI/CD → Job token
+# permissions), or the downloads below are refused.
+
+spec:
+  inputs:
+    build_job:
+      description: the job that ran the build under brec-collect
+    bundle:
+      default: brec-bundle.tar.gz
+      description: the bundle that job keeps as an artifact
+    fail_on:
+      default: grey
+      options: [grey, red]
+      description: >
+        grey fails on anything not proven clean; red only on a proven prebuilt
+    stage:
+      default: test
+    tags:
+      type: array
+      default: []
+      description: runner tags for the verdict job
+    image:
+      default: python:3.12-slim
+      description: any image with python3 >= 3.9; nothing else is needed
+    version:
+      # Kept equal to the tag by the release job: the binaries downloaded are
+      # the ones built from this very template's commit.
+      default: 1.1.0-rc1
+    project:
+      default: a.kuznetcov/build-recorder
+---
+.brec-setup:
+  script:
+    - |
+      brec_bin=${TMPDIR:-/tmp}/brec-bin
+      brec_url="$CI_API_V4_URL/projects/$(printf %s '$[[ inputs.project ]]' | sed 's|/|%2F|g')/packages/generic/brec/$[[ inputs.version ]]"
+      brec_fetch() {
+          if command -v curl >/dev/null 2>&1; then
+              curl -fsSL -H "JOB-TOKEN: $CI_JOB_TOKEN" -o "$2" "$brec_url/$1"
+          elif command -v wget >/dev/null 2>&1; then
+              wget -q --header "JOB-TOKEN: $CI_JOB_TOKEN" -O "$2" "$brec_url/$1"
+          else
+              echo "brec: this image has neither curl nor wget to fetch build-recorder" >&2
+              return 1
+          fi
+      }
+      mkdir -p "$brec_bin"
+      for f in build-recorder brec-collect SHA256SUMS; do
+          brec_fetch "$f" "$brec_bin/$f" || { echo "brec: cannot fetch $f from $brec_url (is this project on the job token allowlist?)" >&2; exit 1; }
+      done
+      (cd "$brec_bin" && grep -E ' (build-recorder|brec-collect)$' SHA256SUMS | sha256sum -c -) || exit 1
+      chmod +x "$brec_bin/build-recorder" "$brec_bin/brec-collect"
+      export PATH="$brec_bin:$PATH"
+      echo "brec: build-recorder $[[ inputs.version ]] in $brec_bin"
+
+brec-verdict-$[[ inputs.build_job ]]:
+  stage: $[[ inputs.stage ]]
+  image: $[[ inputs.image ]]
+  tags: $[[ inputs.tags ]]
+  needs:
+    - job: $[[ inputs.build_job ]]
+      artifacts: true
+  variables:
+    BREC_URL_PROJECT: $[[ inputs.project ]]
+    BREC_VERSION: $[[ inputs.version ]]
+  script:
+    # python3 does the download too: a slim python image has no curl.
+    - |
+      python3 - <<'PY'
+      import hashlib, io, os, sys, tarfile, urllib.parse, urllib.request
+      base = (f"{os.environ['CI_API_V4_URL']}/projects/"
+              f"{urllib.parse.quote(os.environ['BREC_URL_PROJECT'], safe='')}"
+              f"/packages/generic/brec/{os.environ['BREC_VERSION']}")
+      def get(name):
+          req = urllib.request.Request(f"{base}/{name}",
+                                       headers={"JOB-TOKEN": os.environ["CI_JOB_TOKEN"]})
+          try:
+              return urllib.request.urlopen(req).read()
+          except Exception as exc:
+              sys.exit(f"brec: cannot fetch {name} from {base}: {exc} "
+                       "(is this project on the job token allowlist?)")
+      pkg = f"brec-{os.environ['BREC_VERSION']}.tar.gz"
+      data, sums = get(pkg), get("SHA256SUMS").decode()
+      want = {line.split()[1]: line.split()[0] for line in sums.splitlines() if line.strip()}
+      if hashlib.sha256(data).hexdigest() != want.get(pkg):
+          sys.exit(f"brec: {pkg} does not match SHA256SUMS")
+      with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+          for m in tar.getmembers():
+              if m.isfile() and (m.name == "pyproject.toml" or m.name.startswith("brec/")) and ".." not in m.name:
+                  os.makedirs(os.path.join("/tmp/brec-py", os.path.dirname(m.name)), exist_ok=True)
+                  with open(os.path.join("/tmp/brec-py", m.name), "wb") as fh:
+                      fh.write(tar.extractfile(m).read())
+      PY
+    - PYTHONPATH=/tmp/brec-py python3 -m brec analyze "$[[ inputs.bundle ]]" --fail-on $[[ inputs.fail_on ]] --json brec-verdict.json
+  artifacts:
+    when: always
+    paths:
+      - brec-verdict.json
+    expire_in: 30 days

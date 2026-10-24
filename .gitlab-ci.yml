@@ -8,6 +8,7 @@
 stages:
   - probe
   - collect
+  - release
 
 ptrace-probe:
   stage: probe
@@ -83,3 +84,44 @@ collect-ubuntu:
   before_script:
     - apt-get update -q
     - apt-get install -y -q gcc make autoconf automake xxd libssl-dev python3
+
+# ── Release: what templates/brec.yml downloads ───────────────────────────────
+# On a v* tag: a static build-recorder (so it runs in any glibc or musl image
+# a consuming project builds in), brec-collect, the brec package and their
+# checksums, into this project's generic package registry under the version.
+# The three version strings must agree with the tag, or the component would
+# fetch binaries built from some other commit.
+release:
+  stage: release
+  image: registry.altlinux.org/alt/alt:p11
+  tags: [brec]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]/
+  script:
+    - apt-get update -q
+    - apt-get install -y -q gcc make autoconf automake xxd libssl-devel glibc-devel-static libssl-devel-static zlib-devel-static curl file
+    - ver=${CI_COMMIT_TAG#v}
+    - |
+      grep -q "^AC_INIT(\[Build Recorder\], \[$ver\])" configure.ac || { echo "configure.ac does not say $ver"; exit 1; }
+      grep -q "^      default: $ver\$" templates/brec.yml || { echo "templates/brec.yml does not default to $ver"; exit 1; }
+      grep -q "^version = \"$(echo "$ver" | sed 's/-//')\"" pyproject.toml || { echo "pyproject.toml does not say $ver"; exit 1; }
+    - autoreconf -i
+    - ./configure
+    # OpenSSL's static archive pulls in zlib for its compression code.
+    - make -C src LDFLAGS=-static LIBS="-lcrypto -lz"
+    - strip build-recorder
+    - file build-recorder | grep -q 'statically linked'
+    - ./build-recorder -o /dev/null true
+    - mkdir dist
+    - cp build-recorder scripts/brec-collect dist/
+    - tar --exclude=__pycache__ -czf "dist/brec-$ver.tar.gz" pyproject.toml brec
+    - (cd dist && sha256sum build-recorder brec-collect "brec-$ver.tar.gz" > SHA256SUMS && cat SHA256SUMS)
+    - |
+      for f in dist/*; do
+          curl -fsS -H "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" \
+              "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/brec/$ver/$(basename "$f")"
+          echo
+      done
+  artifacts:
+    paths:
+      - dist/

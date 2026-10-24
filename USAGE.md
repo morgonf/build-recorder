@@ -308,6 +308,64 @@ brec analyze bundle.tar.gz --fail-on red        # GREY не валит шаг
 `--pkg-dump` (старое имя `--rpm-dump` осталось). Чей это дамп, определяется по
 третьей колонке, поэтому дамп dpkg не будет прочитан как rpm.
 
+### Компонент GitLab CI
+
+`templates/brec.yml` подключает всё это к чужому пайплайну одной записью
+`include`. Сборочная джоба сама вызывает `brec-collect` (обернуть чужую
+команду компонент не может), всё остальное компонент берёт на себя:
+
+```yaml
+include:
+  - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc1
+    inputs:
+      build_job: build          # обязательный
+      # bundle: brec-bundle.tar.gz
+      # fail_on: grey           # или red
+      # stage: test
+      # tags: [docker]
+
+build:
+  image: ubuntu:24.04
+  before_script:
+    - apt-get update -q && apt-get install -y -q curl gcc make
+    - !reference [.brec-setup, script]
+  script:
+    - brec-collect -o brec-bundle.tar.gz --payload dist -- make install DESTDIR=$PWD/dist
+  artifacts:
+    when: always
+    paths: [brec-bundle.tar.gz]
+```
+
+- `.brec-setup` скачивает из реестра пакетов build-recorder статический
+  `build-recorder` и `brec-collect` той версии, на которую указывает
+  `@v...`, сверяет sha256 и кладёт их в `PATH`. Бинарь статический, поэтому
+  работает в любом образе на glibc или musl. Нужен только `curl` или `wget`.
+- Джоба `brec-verdict-<build_job>` в образе `python:3.12-slim` скачивает пакет
+  `brec`, выполняет `brec analyze` и падает по вердикту. Отчёт сохраняется
+  артефактом `brec-verdict.json`.
+- Проект build-recorder закрытый. Проект-потребитель должен быть в allowlist
+  job token build-recorder (Settings → CI/CD → Job token permissions), иначе
+  скачивание будет отклонено с подсказкой об этом.
+- Компонент можно подключить несколько раз с разными `build_job`, у каждой
+  сборки будет своя джоба вердикта.
+
+Три правила, без которых вердикт врёт:
+
+1. **Тулчейн из пакетов.** Официальные образы `rust:`, `golang:`, `node:`
+   ставят компилятор в `/usr/local` мимо пакетного менеджера. Тогда компилятор
+   и его стандартная библиотека не принадлежат ни одному пакету и выглядят
+   чужими прекомпилятами, и вердикт будет RED. Брать тулчейн из пакетов
+   дистрибутива (`apt-get install rustc cargo golang-go`).
+2. **Зависимости скачивать до трассировки.** То, что `cargo` или `go` скачал
+   из сети под трассировщиком, пришло из сокета и не имеет наблюдаемой
+   родословной, поэтому будет GREY. Делать `cargo fetch` или `go mod download`
+   до `brec-collect`, а внутри собирать офлайн (`cargo build --offline`).
+3. **Поставляемое через `--payload`.** Без него вердикт говорит обо всём, что
+   сборка тронула, а не о том, что уезжает пользователю.
+
+Накладные расходы трассировки пока не замерены. Пример для четырёх языков
+(C, C++, Rust, Go) лежит в проекте `a.kuznetcov/brec-ci-demo`.
+
 ---
 
 ## Анализ результатов
