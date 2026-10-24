@@ -17,7 +17,7 @@ ptrace-probe:
     - apt-get install -y -q gcc make autoconf automake xxd libssl-devel python3
     # What the job runs under: these decide whether ptrace is allowed at all.
     - grep -E '^(CapEff|Seccomp|NoNewPrivs)' /proc/self/status
-    - cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "yama: absent"
+    - cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "yama absent"
     - uname -r
     - autoreconf -i
     - ./configure
