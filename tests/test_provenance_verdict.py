@@ -475,13 +475,99 @@ def test_detect_hash_algo_from_graph(tmp_path):
     assert pv.detect_hash_algo(parse_out(_payload_out(tmp_path, "b" * 40)).files) == "sha1"
 
 
-def test_no_package_backend_flags_system_libs(out_file):
-    # Without OS-package attribution, the system libc.so.6 becomes a foreign
-    # binary — demonstrates why enrichment is required for a clean verdict.
+def test_the_verdict_does_not_depend_on_packages(out_file):
+    """Package attribution used to be the trust criterion: without it the
+    system libc.so.6 was a foreign binary and every output RED.  A shared
+    object is not code copied into the output, and where a prebuilt came from
+    decides nothing now, so the verdict is the same with or without packages."""
     graph = parse_out(out_file)
     copies = pv.parse_copies(out_file)
-    rep = pv.compute_verdict(graph, copies, [])  # no backends
+    bare = pv.compute_verdict(graph, copies, [])
+    labelled = pv.compute_verdict(parse_out(out_file), copies, [StubBackend()])
+    assert [(f.artifact, f.verdict, f.foreign_leaves) for f in bare.findings] == \
+        [(f.artifact, f.verdict, f.foreign_leaves) for f in labelled.findings]
+    assert "/home/u/proj/build/app" not in {f.artifact for f in bare.findings}
+
+
+# ── Prebuilt objects, whoever packaged them ───────────────────────────────────
+
+def _link_out(tmp_path, *leaves: str, copied: str | None = None) -> Path:
+    """cc1 compiles main.c to main.o (reading its own libgmp on the way), ld
+    links main.o and *leaves* into app; optionally *copied* is hardlinked into
+    the output tree as a second shipped file."""
+    text = (
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        + _file(":fcc1", "/usr/libexec/gcc/cc1", "cc1")
+        + _file(":fgmp", "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0", "libgmp.so.10.5.0")
+        + _file(":fld", "/usr/bin/ld", "ld")
+        + _file(":fmain", "/home/u/proj/main.c", "main.c")
+        + _file(":fmaino", "/home/u/proj/main.o", "main.o")
+        + _file(":fapp", "/home/u/proj/app", "app")
+        + ":pcc a b:process .\n:pcc b:executable :fcc1 .\n"
+        + ":pcc b:reads :fmain .\n:pcc b:reads :fgmp .\n:pcc b:writes :fmaino .\n"
+        + ":pld a b:process .\n:pld b:executable :fld .\n:pld b:reads :fmaino .\n"
+        + ":pld b:writes :fapp .\n"
+    )
+    for i, leaf in enumerate(leaves):
+        text += _file(f":fl{i}", leaf, Path(leaf).name) + f":pld b:reads :fl{i} .\n"
+    if copied:
+        text += (_file(":fsrc", copied, Path(copied).name)
+                 + _file(":fdst", "/home/u/proj/dist/" + Path(copied).name, Path(copied).name)
+                 + "_:hardlink0 b:hardlink-from :fsrc .\n_:hardlink0 b:hardlink-to :fdst .\n")
+    p = tmp_path / "link.out"
+    p.write_text(text)
+    return p
+
+
+def _verdict(p: Path, **kw):
+    return pv.compute_verdict(parse_out(p), pv.parse_copies(p), [StubBackend()], **kw)
+
+
+def test_a_packaged_static_archive_is_a_prebuilt(tmp_path):
+    """libz.a from a -devel package is code nobody compiled in this build.
+    The package is reported, and decides nothing."""
+    rep = _verdict(_link_out(tmp_path, "/usr/lib/x86_64-linux-gnu/libz.a"))
     assert rep.verdict == "RED"
-    # app now also flagged because libc.so.6 has no package
-    by_art = {f.artifact: f for f in rep.findings}
-    assert "/home/u/proj/build/app" in by_art
+    (f,) = [f for f in rep.findings if f.artifact.endswith("/app")]
+    assert f.foreign_leaves == ["/usr/lib/x86_64-linux-gnu/libz.a"]
+    assert rep.prebuilt_packages["/usr/lib/x86_64-linux-gnu/libz.a"] == "glibc-2.38"
+
+
+def test_the_toolchain_runtime_is_listed_not_red(tmp_path):
+    out = _link_out(tmp_path, "/usr/lib/x86_64-linux-gnu/Scrt1.o",
+                    "/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a",
+                    "/usr/lib/x86_64-linux-gnu/libc_nonshared.a")
+    rep = _verdict(out)
+    assert rep.verdict == "GREEN"
+    assert sorted(Path(p).name for p in rep.runtime) == \
+        ["Scrt1.o", "libc_nonshared.a", "libgcc.a"]
+    # --strict: the literal answer to "is there any prebuilt object in it".
+    assert _verdict(out, runtime=[]).verdict == "RED"
+
+
+def test_allow_extends_the_exemption(tmp_path):
+    out = _link_out(tmp_path, "/opt/sdk/lib/libvendor.a")
+    assert _verdict(out).verdict == "RED"
+    rep = _verdict(out, runtime=list(pv.DEFAULT_RUNTIME) + ["/opt/sdk/*"])
+    assert rep.verdict == "GREEN"
+    assert "/opt/sdk/lib/libvendor.a" in rep.runtime
+
+
+def test_a_shared_object_linked_against_is_not_incorporated(tmp_path):
+    """Read by ld it is a reference; cc1's own libgmp is cc1's code."""
+    rep = _verdict(_link_out(tmp_path, "/opt/pre/libthing.so.1"), runtime=[])
+    assert rep.verdict == "GREEN"
+
+
+def test_a_shared_object_copied_into_the_output_is_shipped_prebuilt(tmp_path):
+    rep = _verdict(_link_out(tmp_path, copied="/usr/lib/x86_64-linux-gnu/libfoo.so.1"))
+    assert rep.verdict == "RED"
+    (f,) = [f for f in rep.findings if f.artifact.endswith("dist/libfoo.so.1")]
+    assert f.foreign_leaves == ["/usr/lib/x86_64-linux-gnu/libfoo.so.1"]
+
+
+def test_rust_standard_library_is_toolchain_runtime(tmp_path):
+    std = "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-6f17d22bba15001f.rlib"
+    rep = _verdict(_link_out(tmp_path, std))
+    assert rep.verdict == "GREEN"
+    assert std in rep.runtime

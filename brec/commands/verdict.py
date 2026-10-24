@@ -8,17 +8,24 @@ incorporated into its outputs?
 Every file the build PRODUCED is classified by tracing its content lineage
 through the observed process/file graph down to input leaves:
 
-  GREEN  — lineage terminates only in source text and trusted inputs
-           (OS-package files = toolchain/system; project source);
-  RED    — incorporates a FOREIGN prebuilt binary: a .o/.a/.so/blob that was
-           not compiled from source in this build, is not provided by an OS
-           package, and sits at a path this build never wrote (a phantom binary
-           dependency), whether linked in or copied / hardlinked into an output;
+  GREEN  — lineage terminates only in source text, tools, and the toolchain's
+           own runtime (crt*.o, libgcc.a, libc_nonshared.a, Rust's std rlibs:
+           DEFAULT_RUNTIME, listed in the report);
+  RED    — incorporates a PREBUILT binary: an object file or archive that was
+           not compiled in this build and sits at a path this build never
+           wrote, linked or archived in, or any binary (a shared object too)
+           copied or hardlinked into an output.  Whoever packaged it does not
+           matter: libz.a from a -devel package is as prebuilt as one from
+           a vendor tarball.  The owning package is shown, as information;
   GREY   — produced with no observable source lineage (content from a socket or
            other unobserved channel, or a syscall-coverage gap), or built from
            binary content that no observed write produced at a path this build
            did write.  The tool cannot assert GREEN, and says so rather than
            guessing either way.
+
+A shared object read by the linker is a reference resolved at run time, not
+code in the output, and one read by any other process is that process's own
+code (cc1 loads gmp and mpfr); neither is a prebuilt *in* the output.
 
 Package verdict = GREEN iff zero RED and zero GREY.
 
@@ -34,9 +41,10 @@ Two things keep that verdict from being vacuous:
     gaps      through (io_uring). A trace with a gap can never be GREEN: its
               file layer is known-incomplete, so silence is not evidence.
 
-Run `brec enrich` on the .out first: without OS-package attribution, system
-libraries look like foreign binaries and inflate RED/GREY. The verdict is only
-as sound as the graph — see the syscall-coverage audit for its assumptions
+Package attribution (`brec enrich`, --pkg-dump) only labels findings now; the
+verdict is the same without it.  --strict drops the runtime exemption, the
+literal answer to "is there any prebuilt object in it"; --allow extends it.
+The verdict is only as sound as the graph — see the syscall-coverage audit for its assumptions
 (trusted toolchain, no covert channels, in-process JVM/.NET out of scope).
 
 Usage:
@@ -45,17 +53,21 @@ Usage:
   brec verdict <build.out> --payload /path/to/buildroot
   brec verdict <build.out> --payload files.list --json verdict.json
   brec verdict <build.out> --pkg-dump packages.tsv --payload payload.tsv
+  brec verdict <build.out> --strict
+  brec verdict <build.out> --allow '/opt/sdk/*' --allow 'libfoo.a'
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 from brec.classify import is_build_artifact, is_pseudo_file, is_shared_object_name
 from brec.commands.common import add_provenance_option, load_graph
@@ -89,6 +101,43 @@ def is_binary(abspath: str) -> bool:
     if is_shared_object_name(name):
         return True
     return Path(name).suffix in _BIN_EXTS
+
+
+# ── The toolchain's own runtime ──────────────────────────────────────────────
+#
+# Every C program on Linux is linked with a few objects nobody compiles in the
+# build: the start-up code, libgcc, the static part of glibc.  Rust links its
+# precompiled standard library.  Taken literally, "contains no prebuilt object"
+# is false for every build there is, so these are listed by name, reported as
+# what they are, and do not make a verdict RED.  The list is the only exemption:
+# where a binary came from (a distribution package or not) decides nothing.
+# --allow extends it, --strict empties it.
+
+DEFAULT_RUNTIME: tuple[str, ...] = (
+    # C start-up and finalisation (glibc, gcc)
+    "crt1.o", "Scrt1.o", "rcrt1.o", "gcrt1.o", "grcrt1.o", "Mcrt1.o",
+    "crti.o", "crtn.o", "crtbegin*.o", "crtend*.o",
+    "crtfastmath.o", "crtprec*.o", "crtoffloadbegin.o", "crtoffloadend.o",
+    # compiler support libraries (gcc)
+    "libgcc.a", "libgcc_eh.a", "libssp_nonshared.a",
+    # the static part of glibc, and its stubs (empty since glibc 2.34)
+    "libc_nonshared.a", "libdl.a", "libpthread.a", "librt.a", "libutil.a", "libanl.a",
+    # Rust's precompiled standard library, in the toolchain's sysroot
+    "*/lib/rustlib/*/lib/*.rlib",
+)
+
+
+def runtime_matcher(patterns: Iterable[str]):
+    """Predicate over abspaths: a pattern with "/" matches the whole path,
+    one without matches the file name."""
+    pats = list(patterns)
+
+    def match(abspath: str) -> bool:
+        name = Path(abspath).name
+        return any(
+            fnmatch.fnmatchcase(abspath if "/" in p else name, p) for p in pats
+        )
+    return match
 
 
 # ── Copy-edge parsing (supplements brec.model) ────────────────────────────────
@@ -271,6 +320,10 @@ class Report:
     coverage_gaps: list[CoverageGap] = field(default_factory=list)
     payload: PayloadStats | None = None
     payload_entries: list[PayloadEntry] = field(default_factory=list)
+    # Where each prebuilt in the findings came from, "" when no package owns it.
+    prebuilt_packages: dict[str, str] = field(default_factory=dict)
+    # Toolchain runtime objects linked in (exempt by name), with their package.
+    runtime: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -288,6 +341,10 @@ class Report:
             "coverage_gaps": [
                 {"process": g.proc, "kind": g.kind, "cmd": g.cmd}
                 for g in self.coverage_gaps
+            ],
+            "prebuilt_packages": self.prebuilt_packages,
+            "toolchain_runtime": [
+                {"path": p, "package": pkg} for p, pkg in self.runtime.items()
             ],
             "payload": self.payload.to_dict() if self.payload else None,
             "payload_findings": [
@@ -384,7 +441,14 @@ def compute_verdict(
     backends: list[ProvenanceBackend],
     gaps: list[CoverageGap] | None = None,
     payload: list[tuple[str, Path | None, str | None]] | None = None,
+    runtime: Iterable[str] | None = None,
 ) -> Report:
+    """Classify every produced file; see the module docstring.
+
+    *backends* only label findings with the package a prebuilt came from; they
+    no longer decide anything.  *runtime* is the exemption list of toolchain
+    runtime objects (DEFAULT_RUNTIME when None, nothing when empty).
+    """
     files = graph.files
     procs = graph.procs
     gaps = list(gaps or [])
@@ -411,25 +475,10 @@ def compute_verdict(
     copy_src: dict[str, str] = {c.dst: c.src for c in copies}
     produced: set[str] = set(writer_procs) | set(copy_src)
 
-    _pkg_cache: dict[str, bool] = {}
+    is_runtime = runtime_matcher(DEFAULT_RUNTIME if runtime is None else runtime)
 
-    def has_package(furi: str) -> bool:
-        if furi in _pkg_cache:
-            return _pkg_cache[furi]
-        fn = files.get(furi)
-        ok = False
-        if fn is not None:
-            # Package attribution baked in by `brec enrich` takes precedence, so the
-            # verdict runs on an enriched .out with no live backend needed.
-            if fn.pkg_name or fn.rpm_name:
-                ok = True
-            else:
-                for b in backends:
-                    if b.available() and b.lookup(fn.abspath, fn.git_blob_sha1):
-                        ok = True
-                        break
-        _pkg_cache[furi] = ok
-        return ok
+    # Leaves reached through a copy or a hardlink: the output *is* that file.
+    copied_leaves = {src for src in copy_src.values() if src not in produced}
 
     # Paths this build wrote at least once.  Content found at such a path is a
     # different question from content found anywhere else: see
@@ -438,19 +487,37 @@ def compute_verdict(
         files[u].abspath for u in writer_procs if u in files
     }
 
-    def _unowned_binary(furi: str) -> bool:
+    def incorporated_binary(furi: str) -> bool:
+        """A pre-existing binary whose content ends up in the output.
+
+        Object files and archives a process reads are code it copies in: that
+        is what a linker does with them.  A shared object is not: read by the
+        linker it is a reference resolved at run time, read by any other
+        process it is that process's own code, loaded with it (cc1 opens gmp
+        and mpfr on every compile).  Only a copy or hardlink of one into the
+        output ships it.
+        """
         if furi in produced:
             return False
         fn = files.get(furi)
-        if fn is None:
+        if fn is None or not is_binary(fn.abspath):
             return False
-        return is_binary(fn.abspath) and not has_package(furi)
+        if is_shared_object_name(Path(fn.abspath).name) and furi not in copied_leaves:
+            return False
+        return True
 
     def is_foreign_binary(furi: str) -> bool:
-        """A pre-existing binary leaf with no OS package: a prebuilt not built here."""
-        if not _unowned_binary(furi):
+        """A prebuilt not built here, at a path this build never wrote."""
+        if not incorporated_binary(furi):
             return False
-        return files[furi].abspath not in written_paths
+        path = files[furi].abspath
+        return path not in written_paths and not is_runtime(path)
+
+    def is_runtime_binary(furi: str) -> bool:
+        if not incorporated_binary(furi):
+            return False
+        path = files[furi].abspath
+        return path not in written_paths and is_runtime(path)
 
     def is_unattributed_binary(furi: str) -> bool:
         """Binary content at a path this build wrote, that no observed write produced.
@@ -463,9 +530,21 @@ def compute_verdict(
         this build was writing that path.  Calling it source-clean would be a
         guess.  It is the definition of GREY, and it is reported as such.
         """
-        if not _unowned_binary(furi):
+        if not incorporated_binary(furi):
             return False
         return files[furi].abspath in written_paths
+
+    def package_of(furi: str) -> str:
+        fn = files[furi]
+        if fn.rpm_nevra:
+            return fn.rpm_nevra
+        if fn.pkg_name:
+            return f"{fn.pkg_name}={fn.pkg_version}" if fn.pkg_version else fn.pkg_name
+        for b in backends:
+            ref = b.lookup(fn.abspath, fn.git_blob_sha1) if b.available() else None
+            if ref is not None:
+                return ref.version if ref.backend == "rpm" else f"{ref.name}={ref.version}"
+        return ""
 
     # ── Terminal input leaves feeding a produced file's content ──────────────
     #
@@ -509,6 +588,8 @@ def compute_verdict(
         return comp_leaves[cid] if cid is not None else set()
 
     findings: list[Finding] = []
+    leaf_pkg: dict[str, str] = {}        # prebuilt abspath -> package, "" if none
+    runtime_used: dict[str, str] = {}    # toolchain runtime abspath -> package
     verdict_by_uri: dict[str, str] = {}
     green = red = grey = 0
     real = 0
@@ -523,9 +604,13 @@ def compute_verdict(
         if real_art:
             real += 1
         ls = leaves(furi)
-        foreign = sorted(
-            files[l].abspath for l in ls if is_foreign_binary(l)
-        )
+        foreign_uris = [l for l in ls if is_foreign_binary(l)]
+        foreign = sorted(files[l].abspath for l in foreign_uris)
+        for l in foreign_uris:
+            leaf_pkg.setdefault(files[l].abspath, package_of(l))
+        for l in ls:
+            if is_runtime_binary(l):
+                runtime_used.setdefault(files[l].abspath, package_of(l))
         unattributed = sorted(
             files[l].abspath for l in ls if is_unattributed_binary(l)
         )
@@ -537,7 +622,7 @@ def compute_verdict(
             verdict_by_uri[furi] = "RED"
             findings.append(Finding(
                 artifact=fn.abspath, verdict="RED",
-                reason="incorporates prebuilt binary not built from source in this build",
+                reason="incorporates a prebuilt binary not built from source in this build",
                 foreign_leaves=foreign,
             ))
         elif unattributed:
@@ -595,6 +680,7 @@ def compute_verdict(
         green=green, red=red, grey=grey, fidelity=fidelity,
         findings=sorted(findings, key=lambda f: (f.verdict, f.artifact)),
         coverage_gaps=gaps, payload=pstats, payload_entries=pentries,
+        prebuilt_packages=leaf_pkg, runtime=dict(sorted(runtime_used.items())),
     )
 
 
@@ -743,8 +829,13 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append(f"  coverage gaps: {len(rep.coverage_gaps)} process(es) used "
                      "I/O this tracer cannot observe; GREEN is not available")
 
+    if rep.runtime:
+        names = sorted({Path(p).name for p in rep.runtime})
+        lines.append(f"  toolchain runtime linked in: {len(rep.runtime)} object(s), "
+                     f"exempt by name: {', '.join(names)}")
+
     if rep.verdict == "GREEN":
-        lines.append("  → every produced file traces to source + trusted inputs.")
+        lines.append("  → no prebuilt object besides the toolchain runtime went into the outputs.")
         if rep.payload:
             lines.append("  → every shipped file matches an observed build output.")
 
@@ -760,7 +851,8 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append(f"  {_BANNER[f.verdict]}  {f.artifact}")
         lines.append(f"      {f.reason}")
         for leaf in f.foreign_leaves:
-            lines.append(f"      ← prebuilt: {leaf}")
+            pkg = rep.prebuilt_packages.get(leaf)
+            lines.append(f"      ← prebuilt: {leaf}" + (f"  [{pkg}]" if pkg else ""))
         for leaf in f.unattributed_leaves:
             lines.append(f"      ← unattributed: {leaf}")
 
@@ -784,6 +876,21 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
                          "(e.g. rpm -qpl), or brec-collect's payload.tsv. "
                          "Every entry must trace to the graph.")
     ap.add_argument("--json", type=Path, default=None, help="write JSON report here")
+    add_runtime_options(ap)
+
+
+def add_runtime_options(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--allow", action="append", default=[], metavar="PATTERN",
+                    help="also exempt prebuilt objects matching PATTERN (a file "
+                         "name glob, or a path glob when it contains /); repeatable")
+    ap.add_argument("--strict", action="store_true",
+                    help="exempt nothing, not even the toolchain runtime "
+                         "(crt*.o, libgcc.a, ...): every prebuilt object is RED")
+
+
+def runtime_from_args(args) -> list[str]:
+    base = [] if getattr(args, "strict", False) else list(DEFAULT_RUNTIME)
+    return base + list(getattr(args, "allow", []) or [])
 
 
 def run(args) -> int:
@@ -801,7 +908,8 @@ def run(args) -> int:
     backends = detect_backends(args.rpm_dump)
     payload = collect_payload(args.payload) if args.payload else None
 
-    rep = compute_verdict(graph, copies, backends, gaps=gaps, payload=payload)
+    rep = compute_verdict(graph, copies, backends, gaps=gaps, payload=payload,
+                          runtime=runtime_from_args(args))
 
     print(_format_report(rep, str(args.out_file)))
     if args.json:

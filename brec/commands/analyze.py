@@ -146,6 +146,7 @@ def _header(bundle: Path, manifest: dict[str, str], backends: list) -> str:
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("bundle", type=Path, help="brec-collect bundle (.tar.gz) or its extracted directory")
     ap.add_argument("--json", type=Path, default=None, help="write the JSON report here")
+    v.add_runtime_options(ap)
     ap.add_argument("--fail-on", choices=("grey", "red"), default="grey",
                     help="lowest verdict that fails: grey (default) also fails "
                          "on what could not be verified, red only on a proven prebuilt")
@@ -173,7 +174,8 @@ def run(args) -> int:
         print(_header(args.bundle, manifest, backends))
         graph = load_graph(trace)
         rep = v.compute_verdict(graph, v.parse_copies(trace), backends,
-                                gaps=v.parse_coverage_gaps(trace), payload=payload)
+                                gaps=v.parse_coverage_gaps(trace), payload=payload,
+                                runtime=v.runtime_from_args(args))
 
     if manifest.get("payload") == "missing" and rep.verdict == "GREEN":
         rep.verdict = "GREY"

@@ -162,11 +162,12 @@ def test_analyze_uses_the_bundled_package_database(tmp_path, capsys):
     assert "GREEN" in capsys.readouterr().out
 
 
-def test_analyze_without_packages_sees_libc_as_foreign(tmp_path):
-    """The control for the test above: the dump is what makes it GREEN."""
+def test_analyze_without_packages_gives_the_same_verdict(tmp_path):
+    """libc.so.6 is a shared object: not code in the output, with or without
+    a package database to name its owner."""
     root = _bundle(tmp_path, {"pkgdb": "none", "payload": "present"},
                    payload=f"{_blob(APP)}\tdist/app\n", packages=None)
-    assert _run(root) == 1
+    assert _run(root) == 0
 
 
 def test_analyze_reads_a_tarball_and_ignores_foreign_members(tmp_path, capsys):

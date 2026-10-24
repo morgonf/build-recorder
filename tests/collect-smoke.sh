@@ -90,3 +90,39 @@ PY
 python3 -m brec analyze "$work/ok.tar.gz" --json "$work/verdict.json" || fail "brec analyze did not say GREEN (exit $?)"
 python3 -m brec analyze "$work/fail.tar.gz" >/dev/null && rc=0 || rc=$?
 [ "$rc" -ne 2 ] || fail "brec analyze could not read the bundle of a failed build"
+
+# Positive controls: a prebuilt archive that does go into the binary must make
+# the verdict RED, wherever it came from.  First one compiled here before and
+# outside the trace, then, where the image has it, a static library from a
+# distribution package; the verdict used to trust the second one.
+cd "$work"
+printf 'int planted_marker(void){return 42;}\n' > planted.c
+gcc -c planted.c -o planted.o && ar rcs libplanted.a planted.o
+printf 'int planted_marker(void);\nint main(void){return planted_marker() != 42;}\n' > uses.c
+brec-collect -o planted.tar.gz --payload pdist -- \
+    sh -c 'mkdir -p pdist && gcc uses.c libplanted.a -o pdist/uses' 2>/dev/null
+cd "$src"
+set +e
+python3 -m brec analyze "$work/planted.tar.gz" > "$work/planted.txt"
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || { cat "$work/planted.txt"; fail "a planted prebuilt archive did not make the verdict RED (exit $rc)"; }
+grep -q 'prebuilt: .*libplanted.a' "$work/planted.txt" || fail "the RED does not name libplanted.a"
+
+libz_a=$(ls /usr/lib/x86_64-linux-gnu/libz.a /usr/lib64/libz.a 2>/dev/null | head -n 1 || true)
+if [ -n "$libz_a" ]; then
+    cd "$work"
+    printf '#include <zlib.h>\nint main(void){return zlibVersion()[0] == 0;}\n' > z.c
+    brec-collect -o zstatic.tar.gz --payload zdist -- \
+        sh -c "mkdir -p zdist && gcc z.c $libz_a -o zdist/z" 2>/dev/null
+    cd "$src"
+    set +e
+    python3 -m brec analyze "$work/zstatic.tar.gz" > "$work/zstatic.txt"
+    rc=$?
+    set -e
+    [ "$rc" -eq 1 ] || { cat "$work/zstatic.txt"; fail "packaged static $libz_a did not make the verdict RED (exit $rc)"; }
+    echo "ok: static $libz_a from a package is reported as prebuilt"
+else
+    echo "skip: no static libz in this image"
+fi
+echo "ok: planted prebuilt archive is RED"
