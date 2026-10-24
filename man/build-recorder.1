@@ -105,6 +105,9 @@ Indicates that a process created a hard link, with the same blank-node shape (\f
 .PP
 For an example, please refer to the file doc/output.md included in the project's repository or alternatively with the build-recorder package.
 
+.SH EXIT STATUS
+The exit status of the recorded command, so that a build step run under build-recorder fails when the build does. A command killed by a signal yields 128 plus the signal number, as in the shell. Only the top-level command counts: a failing child that the command itself tolerates does not change the status. A failure of build-recorder itself is reported with a message and a non-zero status.
+
 .SH BUGS
 There is a very slight chance that build-recorder might produce invalid information about a build process, specifically in scenarios of concurrent accesses to the assets used by said process, such as during a system update.
 

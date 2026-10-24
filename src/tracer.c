@@ -927,9 +927,15 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
     }
 }
 
-static void
+// Returns the root command's exit status, shell-style (128 + signal for a
+// kill): a CI step running a build under the tracer has to fail when the
+// build does, and the tracer used to exit 0 whatever happened underneath.
+static int
 tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 {
+    const pid_t root = pid;
+    int root_status = 0;
+
     waitpid(pid, NULL, 0);
 
     record_process_env(pi->outname, envp);
@@ -1046,19 +1052,25 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		error(EXIT_FAILURE, errno, "failed restarting process");
 	    }
 	} else if (WIFEXITED(status)) {	// child process exited
+	    if (pid == root)
+		root_status = WEXITSTATUS(status);
 	    --running;
 	    reap_process(pid);
 	} else if (WIFSIGNALED(status)) {	// child killed by a signal
 	    // Previously unhandled: a tracee dying on a signal left `running`
 	    // undecremented and its writes unhashed, desyncing the tables and
 	    // truncating the graph. Reap it the same as a normal exit.
+	    if (pid == root)
+		root_status = 128 + WTERMSIG(status);
 	    --running;
 	    reap_process(pid);
 	}
     }
+
+    return root_status;
 }
 
-void
+int
 trace(pid_t pid, char *path, char **envp)
 {
     PROCESS_INFO *pi;
@@ -1067,7 +1079,7 @@ trace(pid_t pid, char *path, char **envp)
 
     pinfo_new(pi, 0);
 
-    tracer_main(pid, pi, path, envp);
+    return tracer_main(pid, pi, path, envp);
 }
 
 void
@@ -1078,7 +1090,7 @@ run_tracee(char **av)
     error(EXIT_FAILURE, errno, "after child exec()");
 }
 
-void
+int
 run_and_record_fnames(char **av, char **envp)
 {
     pid_t pid;
@@ -1090,5 +1102,5 @@ run_and_record_fnames(char **av, char **envp)
 	run_tracee(av);
 
     init();
-    trace(pid, *av, envp);
+    return trace(pid, *av, envp);
 }

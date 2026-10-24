@@ -18,7 +18,7 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include "record.h"
 #include "hash.h"
 
-void run_and_record_fnames(char **av, char **envp);
+int run_and_record_fnames(char **av, char **envp);
 
 // Best-effort: flush and close the Turtle output before dying on a fatal
 // signal, so the .out stays valid RDF instead of being truncated mid-statement
@@ -71,7 +71,5 @@ main(int argc, char **argv, char **envp)
     for (size_t i = 0; i < sizeof (fatal_signals) / sizeof (*fatal_signals); ++i)
 	signal(fatal_signals[i], flush_on_fatal_signal);
 
-    run_and_record_fnames(argv, envp);
-
-    exit(EXIT_SUCCESS);
+    exit(run_and_record_fnames(argv, envp));
 }
