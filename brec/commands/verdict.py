@@ -44,6 +44,7 @@ Usage:
   brec verdict <build.out> --rpm-dump rpm-dump.txt
   brec verdict <build.out> --payload /path/to/buildroot
   brec verdict <build.out> --payload files.list --json verdict.json
+  brec verdict <build.out> --pkg-dump packages.tsv --payload payload.tsv
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from brec.classify import is_build_artifact, is_pseudo_file
+from brec.classify import is_build_artifact, is_pseudo_file, is_shared_object_name
 from brec.commands.common import add_provenance_option, load_graph
 from brec.ir import BuildGraph, FileNode
 from brec.provenance.base import ProvenanceBackend
@@ -85,7 +86,7 @@ _GAP_RE = re.compile(
 
 def is_binary(abspath: str) -> bool:
     name = Path(abspath).name.lower()
-    if ".so." in name:
+    if is_shared_object_name(name):
         return True
     return Path(name).suffix in _BIN_EXTS
 
@@ -209,25 +210,40 @@ def detect_hash_algo(files: dict[str, FileNode]) -> str:
     return max(counts, key=lambda a: counts[a])
 
 
-def collect_payload(spec: Path) -> list[tuple[str, Path | None]]:
-    """Payload file list from a directory tree (buildroot) or a list of paths.
+# One payload line of brec-collect's payload.tsv: "<git-blob hex>\t<path>".
+_MANIFEST_LINE = re.compile(r"^([0-9a-f]{40}|[0-9a-f]{64})\t(.+)$")
 
-    Returns (recorded-path, local-path-or-None); the local path is where the
-    content can be read, when it can be read at all.
+
+def collect_payload(spec: Path) -> list[tuple[str, Path | None, str | None]]:
+    """Payload file list from a directory tree, a list of paths, or a manifest.
+
+    Returns (recorded-path, local-path-or-None, hash-or-None).  The local path
+    is where the content can be read, when it can be read at all; a manifest
+    (brec-collect's payload.tsv) carries the hash instead, taken where the
+    files were, so nothing needs to be readable here.
     """
     if spec.is_dir():
-        out: list[tuple[str, Path | None]] = []
+        out: list[tuple[str, Path | None, str | None]] = []
         for p in sorted(spec.rglob("*")):
-            out.append((str(p), p))
+            out.append((str(p), p, None))
         return out
 
-    entries: list[tuple[str, Path | None]] = []
-    for line in spec.read_text(encoding="utf-8", errors="replace").splitlines():
+    lines = [
+        line.strip("\r\n") for line in
+        spec.read_text(encoding="utf-8", errors="replace").splitlines()
+    ]
+    lines = [line for line in lines if line.strip() and not line.startswith("#")]
+    if lines and all(_MANIFEST_LINE.match(line) for line in lines):
+        return [
+            (m.group(2), None, m.group(1))
+            for m in (_MANIFEST_LINE.match(line) for line in lines)
+        ]
+
+    entries: list[tuple[str, Path | None, str | None]] = []
+    for line in lines:
         line = line.strip()
-        if not line or line.startswith("#"):
-            continue
         p = Path(line)
-        entries.append((line, p if p.exists() else None))
+        entries.append((line, p if p.exists() else None, None))
     return entries
 
 
@@ -367,7 +383,7 @@ def compute_verdict(
     copies: list[Copy],
     backends: list[ProvenanceBackend],
     gaps: list[CoverageGap] | None = None,
-    payload: list[tuple[str, Path | None]] | None = None,
+    payload: list[tuple[str, Path | None, str | None]] | None = None,
 ) -> Report:
     files = graph.files
     procs = graph.procs
@@ -586,7 +602,7 @@ def check_payload(
     files: dict[str, FileNode],
     produced: set[str],
     verdict_by_uri: dict[str, str],
-    payload: list[tuple[str, Path | None]],
+    payload: list[tuple[str, Path | None, str | None]],
 ) -> tuple[PayloadStats, list[PayloadEntry]]:
     """Match every shipped file to the graph, by content hash then by path.
 
@@ -610,7 +626,7 @@ def check_payload(
         vs = {verdict_by_uri.get(u, "GREEN") for u in uris}
         return "RED" if "RED" in vs else ("GREY" if "GREY" in vs else "GREEN")
 
-    for recorded, local in payload:
+    for recorded, local, known in payload:
         if local is not None:
             if local.is_symlink():
                 stats.symlinks += 1
@@ -621,7 +637,18 @@ def check_payload(
         e = PayloadEntry(path=recorded)
         stats.total += 1
 
-        if local is not None:
+        if known is not None:
+            e.sha = known
+            if _ALGO_BY_HEXLEN.get(len(known)) != algo:
+                # Hashed with the other digest: it can match nothing here, and
+                # saying "not observed" would blame the build for the mismatch.
+                e.status = "grey"
+                e.reason = (f"payload hashed with {_ALGO_BY_HEXLEN.get(len(known))}, "
+                            f"the trace with {algo}: nothing to compare")
+                entries.append(e)
+                stats.grey += 1
+                continue
+        elif local is not None:
             try:
                 e.sha = git_blob_hash(local, algo)
             except OSError as exc:
@@ -748,12 +775,14 @@ def _format_report(rep: Report, out_path: str) -> str:
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("out_file", type=Path, help="build-recorder .out")
     add_provenance_option(ap)
-    ap.add_argument("--rpm-dump", type=Path, default=None,
-                    help="rpm file→package dump for OS-package attribution")
+    ap.add_argument("--rpm-dump", "--pkg-dump", dest="rpm_dump", type=Path, default=None,
+                    help="file→package dump for OS-package attribution "
+                         "(rpm or dpkg, told apart by its contents)")
     ap.add_argument("--payload", type=Path, default=None,
                     help="what actually ships: a buildroot/extracted-package "
                          "directory, or a file listing one path per line "
-                         "(e.g. rpm -qpl). Every entry must trace to the graph.")
+                         "(e.g. rpm -qpl), or brec-collect's payload.tsv. "
+                         "Every entry must trace to the graph.")
     ap.add_argument("--json", type=Path, default=None, help="write JSON report here")
 
 

@@ -83,3 +83,10 @@ assert system, "the build read no system file"
 assert not missing, f"system files without a package: {missing}"
 print(f"ok: payload matches the trace, {len(system)} system reads all attributed")
 PY
+
+# The other half: the bundle alone must be enough for a verdict, here GREEN,
+# since the build compiled a source file with packaged tools and shipped the
+# result.  A RED here is what an unowned system file looked like before.
+python3 -m brec analyze "$work/ok.tar.gz" --json "$work/verdict.json" || fail "brec analyze did not say GREEN (exit $?)"
+python3 -m brec analyze "$work/fail.tar.gz" >/dev/null && rc=0 || rc=$?
+[ "$rc" -ne 2 ] || fail "brec analyze could not read the bundle of a failed build"

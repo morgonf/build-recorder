@@ -70,6 +70,19 @@ _TOOL_DIRS: frozenset[str] = frozenset({
 })
 
 # Temp/toolchain intermediate file patterns (from verify-build.py)
+# A shared object by name: libfoo.so, libc.so.6, libstdc++.so.6.0.33.  Not
+# ".so." anywhere in the name: /etc/ld.so.cache and libstdc++.so.6.0.33-gdb.py
+# carry it too.  The first is read by the loader in every process and belongs
+# to no Debian package, so on a dpkg image every build output came out RED,
+# "incorporates prebuilt /etc/ld.so.cache"; on ALT glibc lists it, which hid it.
+_SO_NAME_RE = re.compile(r"\.so(\.\d+)*$")
+
+
+def is_shared_object_name(name: str) -> bool:
+    """True for a file name that is a shared object: libfoo.so or libfoo.so.N[.M...]."""
+    return bool(_SO_NAME_RE.search(name.lower()))
+
+
 _TEMP_RE = re.compile(
     r"/(cc[0-9A-Za-z]{6,}\.(res|lto_wrapper_args|s|o)"
     r"|cmTC_[0-9a-f]+"
@@ -129,7 +142,7 @@ def _dep_class_for(
 
     has_compiler = bool(roles & {"compiler", "assembler"})
     has_linker = "linker" in roles
-    is_so = ".so." in name_lower or name_lower.endswith(".so")
+    is_so = is_shared_object_name(name_lower)
     is_archive = name_lower.endswith(".a")
     is_header = suffix.lower() in _HEADER_EXTS
     is_source = suffix in _SOURCE_EXTS
@@ -234,7 +247,7 @@ def file_role(abspath: str) -> str:
     the file.  ``verify-build.py`` sorts its report by this role.
     """
     name = Path(abspath).name.lower()
-    if ".so." in name or name.endswith(".so"):
+    if is_shared_object_name(name):
         return "dynamic_lib"
     if name.endswith(".a"):
         return "static_archive"
@@ -275,7 +288,7 @@ def is_build_artifact(abspath: str) -> bool:
     name = Path(abspath).name
     if Path(name).suffix.lower() in _ARTIFACT_EXTS:
         return True
-    if ".so." in name:                      # libfoo.so.2, libc.so.6
+    if is_shared_object_name(name):         # libfoo.so.2, libc.so.6
         return True
     return "." not in name and not name.startswith(".")   # bare executable
 
@@ -302,7 +315,7 @@ def dep_type_from_path(abspath: str, has_package: bool) -> str:
     name = Path(abspath).name.lower()
     if name.endswith((".h", ".hpp", ".hh", ".h++")):
         return "static_header"
-    if ".so." in name or name.endswith(".so"):
+    if is_shared_object_name(name):
         return "dynamic_lib"
     if name.endswith(".a"):
         return "static_archive"

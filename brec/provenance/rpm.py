@@ -13,16 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from brec.ir import PackageRef
-
-# Symlink alias pairs: short_prefix → long_prefix.
-# Both forms are indexed so build-recorder paths (which follow symlinks to
-# /usr/...) match RPM database paths regardless of which form they used.
-_ALIAS_PREFIXES: dict[str, str] = {
-    "/lib/":   "/usr/lib/",
-    "/lib64/": "/usr/lib64/",
-    "/bin/":   "/usr/bin/",
-    "/sbin/":  "/usr/sbin/",
-}
+from brec.provenance import tsvdump
 
 # Regex to validate a NEVRA arch suffix: the last .component must be purely
 # alphanumeric + underscore (x86_64, noarch, aarch64, i686, …).
@@ -81,24 +72,13 @@ class RpmBackend:
         long /usr/… form are indexed so lookups succeed regardless of which
         variant build-recorder recorded.
         """
-        self._index = {}
-        with open(env_dump, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                parts = line.rstrip("\n").split("\t", 2)
-                if len(parts) != 3:
-                    continue
-                filepath, rpm_name, rpm_nevra = parts
-                if not filepath:
-                    continue
-                pkg = (rpm_name, rpm_nevra)
-                self._index[filepath] = pkg
-                # Add alias: /lib64/foo → /usr/lib64/foo (and vice versa)
-                for short, long_ in _ALIAS_PREFIXES.items():
-                    if filepath.startswith(short):
-                        self._index[long_ + filepath[len(short):]] = pkg
-                    elif filepath.startswith(long_):
-                        self._index[short + filepath[len(long_):]] = pkg
+        self._index = tsvdump.index(env_dump)
         self._built = True
+
+    @staticmethod
+    def recognizes(env_dump: Path) -> bool:
+        """True when *env_dump* reads as an rpm dump (NEVRA = name-...)."""
+        return tsvdump.written_by(env_dump, "-")
 
     def lookup(self, abspath: str, git_hash: str) -> Optional[PackageRef]:
         """Return the PackageRef for *abspath*, or None if not in the index.

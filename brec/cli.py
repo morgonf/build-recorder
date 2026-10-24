@@ -9,6 +9,7 @@ block and its own answer to "where is the graph".  They are subcommands now:
     brec verdict   built-from-source / no-prebuilt-binary verdict
     brec buildreq  declared BuildRequires vs the packages actually read
     brec report    SPARQL summary of the raw trace
+    brec analyze   the verdict for a brec-collect bundle, in one step
 
 Run as ``python3 -m brec <command>``, or as ``brec <command>`` once installed.
 
@@ -37,6 +38,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
                  "declared BuildRequires vs the packages actually read"),
     "report": ("brec.commands.report",
                "summary of a trace: processes, languages, artifacts"),
+    "analyze": ("brec.commands.analyze",
+                "verdict for a brec-collect bundle (trace + packages + payload)"),
 }
 
 

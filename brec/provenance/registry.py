@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from brec.provenance.base import ProvenanceBackend
+from brec.provenance.dpkg import DpkgBackend
 from brec.provenance.rpm import RpmBackend
 
 # ── Backend table ─────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ from brec.provenance.rpm import RpmBackend
 
 _REGISTRY: dict[str, type] = {
     "rpm": RpmBackend,
+    "dpkg": DpkgBackend,
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -51,8 +53,18 @@ def detect_backends(env_dump: Optional[Path] = None) -> list[ProvenanceBackend]:
     from a previous ``build_index`` call) are included — which in practice
     means an empty list unless a backend was built elsewhere.
     """
+    # Both backends read the same three-column format, so either would load the
+    # other's dump and label every file with the wrong package manager.  The
+    # third column says whose dump it is; only a dump neither recognises (an
+    # empty or hand-made one) is still offered to all, as before.
+    classes = list(_REGISTRY.values())
+    if env_dump is not None:
+        claimed = [c for c in classes if c.recognizes(env_dump)]
+        if claimed:
+            classes = claimed
+
     result: list[ProvenanceBackend] = []
-    for cls in _REGISTRY.values():
+    for cls in classes:
         backend: ProvenanceBackend = cls()  # type: ignore[assignment]
         if env_dump is not None:
             try:
