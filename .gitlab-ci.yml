@@ -1,0 +1,52 @@
+# Probe for the CI integration: does the tracer work on a stock docker
+# executor, with no extra capabilities and the default seccomp profile?
+# Users of a future brec template will run it on runners they do not
+# control, so the answer has to come from such a runner, not from one
+# configured to make it pass.  If this job fails, privileges are added one
+# at a time and the minimum set goes into the template's instructions.
+
+stages:
+  - probe
+
+ptrace-probe:
+  stage: probe
+  image: registry.altlinux.org/alt/alt:p11
+  tags: [brec]
+  script:
+    - apt-get update -q
+    - apt-get install -y -q gcc make autoconf automake xxd libssl-devel python3
+    # What the job runs under: these decide whether ptrace is allowed at all.
+    - grep -E '^(CapEff|Seccomp|NoNewPrivs)' /proc/self/status
+    - cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "yama: absent"
+    - uname -r
+    - autoreconf -i
+    - ./configure
+    - make -C src
+    - ./build-recorder -o smoke.out gcc -c examples/f1.c -o f1.o
+    - gcc -o threads examples/threads.c -lpthread
+    - printf 'input line\n' > threads-input.txt
+    - ./build-recorder -o threads.out ./threads
+    - |
+      python3 - <<'PY'
+      from pathlib import Path
+      from brec.model import parse_out
+
+      g = parse_out(Path("smoke.out"))
+      assert g.procs and g.files, "smoke trace recorded nothing"
+
+      g = parse_out(Path("threads.out"))
+      def paths(uris):
+          return {g.files[u].abspath for u in uris if u in g.files}
+
+      holders = [p for p in g.procs.values()
+                 if any(a.endswith("threads-input.txt") for a in paths(p.reads))
+                 and any(a.endswith("threads-output.o") for a in paths(p.writes))]
+      assert holders, "the thread's read and write are on different subjects"
+      print(f"ok: {len(g.procs)} process node(s), thread attribution holds")
+      PY
+  artifacts:
+    when: always
+    paths:
+      - smoke.out
+      - threads.out
+    expire_in: 1 week
