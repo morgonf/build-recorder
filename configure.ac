@@ -186,6 +186,9 @@ AM_CONDITIONAL([BUILD_FROM_GIT], [test -d "$srcdir/.git"])
 
 dnl What files to generate
 AC_CONFIG_FILES([Makefile src/Makefile examples/Makefile benchmark/Makefile])
+dnl brec-collect carries the version of the tracer it was installed with, so a
+dnl bundle names both from one install.
+AC_CONFIG_FILES([scripts/brec-collect], [chmod +x scripts/brec-collect])
 
 dnl Finally, generate everything
 AC_OUTPUT

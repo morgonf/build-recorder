@@ -1,0 +1,231 @@
+#!/bin/sh
+# Copyright (C) 2026 Andrey Kuznetcov
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# brec-collect: run a build under build-recorder and pack, beside the trace,
+# the facts about the build environment that exist only inside it.
+#
+# The trace alone cannot be judged elsewhere: without the package database a
+# system library looks like a foreign prebuilt, and without the list of what
+# ships the verdict is about everything the build touched.  Those facts vanish
+# with the CI container, so they are taken here and analysed later, anywhere,
+# by `brec analyze`.  Evidence only: no verdicts are computed on this side, and
+# nothing but POSIX sh, tar and coreutils is needed beside the tracer.
+#
+# Exit status: the build's own, so the CI step fails when the build does.  125
+# is this script's own failure (bad usage, no tracer, bundle not written).
+
+set -u
+
+VERSION='@PACKAGE_VERSION@'
+FORMAT=1
+
+me=brec-collect
+
+usage() {
+    cat <<EOF
+usage: $me [options] -- COMMAND [ARG...]
+
+Run COMMAND under build-recorder and write an evidence bundle for brec analyze.
+
+  -o FILE           bundle to write (default: brec-bundle.tar.gz)
+  --payload DIR     what ships, e.g. a DESTDIR install or an artifact
+                    directory; hashed after the build, files are not copied
+  --declared FILE   declared build dependencies, copied into the bundle
+  --sha256          hash with sha256 instead of git-compatible sha1
+  --recorder PATH   build-recorder binary (default: \$BUILD_RECORDER or PATH)
+  -h, --help        this text
+
+The bundle is written even when COMMAND fails.  Exit status is COMMAND's;
+125 means $me itself failed.
+EOF
+}
+
+die() {
+    echo "$me: $*" >&2
+    exit 125
+}
+
+warn() {
+    echo "$me: warning: $*" >&2
+}
+
+bundle=brec-bundle.tar.gz
+payload=
+declared=
+algo=sha1
+recorder=${BUILD_RECORDER:-build-recorder}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+	-o)		[ $# -ge 2 ] || die "-o needs a file"; bundle=$2; shift 2 ;;
+	--payload)	[ $# -ge 2 ] || die "--payload needs a directory"; payload=$2; shift 2 ;;
+	--declared)	[ $# -ge 2 ] || die "--declared needs a file"; declared=$2; shift 2 ;;
+	--recorder)	[ $# -ge 2 ] || die "--recorder needs a path"; recorder=$2; shift 2 ;;
+	--sha256)	algo=sha256; shift ;;
+	-h|--help)	usage; exit 0 ;;
+	--)		shift; break ;;
+	-*)		usage >&2; die "unknown option: $1" ;;
+	*)		break ;;
+    esac
+done
+[ $# -gt 0 ] || { usage >&2; die "missing command to build"; }
+
+command -v "$recorder" >/dev/null 2>&1 || die "build-recorder not found: $recorder"
+recorder=$(command -v "$recorder")
+command -v "${algo}sum" >/dev/null 2>&1 || die "${algo}sum not found"
+[ -z "$declared" ] || [ -r "$declared" ] || die "cannot read $declared"
+
+# Absolute before the build runs: the build may leave the directory changed
+# under us (it cannot change our cwd, but relative paths read badly in the
+# MANIFEST of a bundle opened somewhere else).
+case $bundle in /*) ;; *) bundle=$PWD/$bundle ;; esac
+case $payload in ''|/*) ;; *) payload=$PWD/$payload ;; esac
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/brec-collect.XXXXXX") || die "cannot create a work directory"
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# ── The build ────────────────────────────────────────────────────────────────
+
+# Kept now: "$@" is reused below for the dpkg list files.
+cmdline=$(printf ' %s' "$@" | cut -c 2-)
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if [ "$algo" = sha256 ]; then
+    "$recorder" -o "$work/trace.out" --sha256 "$@"
+else
+    "$recorder" -o "$work/trace.out" "$@"
+fi
+build_status=$?
+finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+[ -s "$work/trace.out" ] || die "the tracer wrote no trace (exit status $build_status)"
+
+# ── The package database ─────────────────────────────────────────────────────
+# One format whatever the distribution: path<TAB>package<TAB>full-version.  rpm
+# gives its NEVRA; dpkg gives package_version_arch, the name a .deb file
+# carries, unambiguous because neither a package name nor a version has "_".
+
+pkgdb=none
+if command -v rpm >/dev/null 2>&1 &&
+   rpm -qa --qf '[%{FILENAMES}\t%{NAME}\t%{NEVRA}\n]' >"$work/packages.tsv" 2>/dev/null &&
+   [ -s "$work/packages.tsv" ]; then
+    pkgdb=rpm
+elif command -v dpkg-query >/dev/null 2>&1 && [ -d /var/lib/dpkg/info ]; then
+    # Per-package `dpkg -L` is one process per package; the .list files are
+    # what it reads anyway.  A multiarch package's list is named name:arch.list.
+    dpkg-query -W -f='${binary:Package}\t${Package}_${Version}_${Architecture}\n' \
+	>"$work/dpkg-versions" 2>/dev/null
+    set -- /var/lib/dpkg/info/*.list
+    if [ -s "$work/dpkg-versions" ] && [ -e "$1" ]; then
+	awk -F '\t' '
+	    NR == FNR { full[$1] = $2; next }
+	    FNR == 1 {
+		pkg = FILENAME
+		sub(/^.*\//, "", pkg); sub(/\.list$/, "", pkg)
+		name = pkg; sub(/:.*/, "", name)
+		v = (pkg in full) ? full[pkg] : full[name]
+	    }
+	    $0 != "/." && v != "" { print $0 "\t" name "\t" v }
+	' "$work/dpkg-versions" "$@" >"$work/packages.tsv"
+	pkgdb=dpkg
+    fi
+    rm -f "$work/dpkg-versions"
+fi
+[ "$pkgdb" != none ] || { rm -f "$work/packages.tsv"; warn "no rpm or dpkg database: system files will look foreign"; }
+
+# ── What ships ───────────────────────────────────────────────────────────────
+# Hashes, not files: the payload check matches by content, and the hash is the
+# tracer's own git-blob digest, so a shipped file and the node that produced it
+# compare directly.  Symlinks are counted, not hashed: they carry no content.
+
+payload_state=absent
+payload_files=0
+payload_symlinks=0
+if [ -n "$payload" ]; then
+    if [ -d "$payload" ]; then
+	payload_state=present
+	(
+	    cd "$payload" || exit 1
+	    find . -type f -exec sh -c '
+		algo=$1; shift
+		for f; do
+		    size=$(wc -c <"$f") || continue
+		    h=$({ printf "blob %d\000" "$size"; cat "$f"; } | "${algo}sum") || continue
+		    printf "%s\t%s\n" "${h%% *}" "${f#./}"
+		done
+	    ' sh "$algo" {} +
+	) | LC_ALL=C sort -t "$(printf '\t')" -k 2 >"$work/payload.tsv"
+	payload_files=$(wc -l <"$work/payload.tsv")
+	payload_symlinks=$(find "$payload" -type l | wc -l)
+    else
+	payload_state=missing
+	warn "payload directory $payload does not exist after the build"
+    fi
+fi
+
+[ -z "$declared" ] || cp "$declared" "$work/declared.txt" || die "cannot copy $declared"
+
+# ── The environment ──────────────────────────────────────────────────────────
+
+{
+    echo "# uname"
+    uname -a
+    echo
+    echo "# os-release"
+    cat /etc/os-release 2>/dev/null || echo "(none)"
+    echo
+    echo "# toolchain"
+    for tool in cc gcc g++ c++ clang ld as ar make cmake ninja meson rustc cargo go python3; do
+	path=$(command -v "$tool" 2>/dev/null) || continue
+	case $tool in
+	    go)	ver=$("$tool" version 2>/dev/null) ;;
+	    *)	ver=$("$tool" --version 2>/dev/null | head -n 1) ;;
+	esac
+	printf '%s\t%s\t%s\n' "$tool" "$path" "$ver"
+    done
+    echo
+    echo "# user"
+    id
+    echo
+    echo "# nproc"
+    nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null
+} >"$work/env.txt" 2>/dev/null
+
+# ── MANIFEST ─────────────────────────────────────────────────────────────────
+# key=value, one per line; the command last, since it is the one value that
+# may hold anything.
+
+case $VERSION in @*) VERSION=unknown ;; esac
+recorder_sha256=$(sha256sum "$recorder" 2>/dev/null | cut -d ' ' -f 1)
+
+{
+    echo "format=$FORMAT"
+    echo "collector=$me $VERSION"
+    echo "recorder=$recorder"
+    echo "recorder_sha256=${recorder_sha256:-unknown}"
+    echo "hash=$algo"
+    echo "pkgdb=$pkgdb"
+    echo "payload=$payload_state"
+    echo "payload_root=$payload"
+    echo "payload_files=$payload_files"
+    echo "payload_symlinks=$payload_symlinks"
+    echo "declared=$( [ -n "$declared" ] && echo present || echo absent )"
+    echo "build_status=$build_status"
+    echo "started=$started"
+    echo "finished=$finished"
+    echo "cwd=$PWD"
+    echo "command=$cmdline"
+} >"$work/MANIFEST"
+
+# MANIFEST first, so a reader can learn the format before the large members.
+members=MANIFEST
+for m in trace.out packages.tsv payload.tsv declared.txt env.txt; do
+    [ -e "$work/$m" ] && members="$members $m"
+done
+# shellcheck disable=SC2086
+tar -C "$work" -czf "$bundle" $members || die "cannot write $bundle"
+
+echo "$me: $bundle (build status $build_status, pkgdb $pkgdb, payload $payload_state: $payload_files files)" >&2
+exit "$build_status"

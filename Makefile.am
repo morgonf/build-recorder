@@ -10,6 +10,10 @@ SUBDIRS = src examples benchmark
 # The manual page was neither installed nor shipped in the tarball before.
 dist_man1_MANS = man/build-recorder.1
 
+# The collector for CI: runs a build under the tracer and packs the evidence
+# that exists only in the build environment (see scripts/brec-collect.in).
+bin_SCRIPTS = scripts/brec-collect
+
 # "make check" also runs the Python test suite of the analysis layer. Missing
 # pytest is reported and skipped rather than failing the build: a C-only
 # checkout stays buildable and testable on its own terms.

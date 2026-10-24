@@ -7,6 +7,7 @@
 
 stages:
   - probe
+  - collect
 
 ptrace-probe:
   stage: probe
@@ -50,3 +51,35 @@ ptrace-probe:
       - smoke.out
       - threads.out
     expire_in: 1 week
+
+# brec-collect as a user would get it: installed by `make install`, then run
+# around a build.  One rpm image and one dpkg image, because the package
+# database dump is the part that differs between them.
+.collect:
+  stage: collect
+  tags: [brec]
+  needs: []
+  script:
+    - autoreconf -i
+    - ./configure
+    - make -C src install-binPROGRAMS
+    - make install-binSCRIPTS
+    - sh tests/collect-smoke.sh
+
+collect-alt:
+  extends: .collect
+  image: registry.altlinux.org/alt/alt:p11
+  before_script:
+    - apt-get update -q
+    - apt-get install -y -q gcc make autoconf automake xxd libssl-devel python3
+
+# 24.04, not 22.04: the xxd in 22.04 has no -n, which src/Makefile.am needs
+# to embed the schema, so the tracer does not build there.
+collect-ubuntu:
+  extends: .collect
+  image: ubuntu:24.04
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    - apt-get update -q
+    - apt-get install -y -q gcc make autoconf automake xxd libssl-dev python3
