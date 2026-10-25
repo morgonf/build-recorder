@@ -590,3 +590,41 @@ def test_a_warm_go_build_cache_is_a_prebuilt(tmp_path):
     assert "GOCACHE" in f.reason
     # The action records beside it are not code.
     assert not pv.is_binary("/root/.cache/go-build/02/" + "026ea442" * 8 + "-a")
+
+
+def _hashed(uri, abspath, sha):
+    return (f"{uri} a b:file .\n{uri} b:abspath \"{abspath}\" .\n"
+            f"{uri} b:name \"{Path(abspath).name}\" .\n{uri} b:hash \"{sha}\" .\n")
+
+
+def _reread_out(tmp_path, write_first: bool) -> Path:
+    """go writes _pkg_.a and reads the same bytes back through a second node;
+    link turns it into app.  *write_first* puts the write node before the
+    read, as when the file is read while still open for writing."""
+    pkg = "/tmp/go-build1/b027/_pkg_.a"
+    w = _hashed(":fw", pkg, "5c" * 20)
+    r = _hashed(":fr", pkg, "5c" * 20)
+    text = (
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        + _file(":fsrc", "/home/u/proj/main.go", "main.go")
+        + _file(":fapp", "/home/u/proj/app", "app")
+        + (w + r if write_first else r + w)
+        + ":pgo a b:process .\n:pgo b:reads :fsrc .\n:pgo b:writes :fw .\n"
+        + ":pgo b:reads :fr .\n"
+        + ":pld a b:process .\n:pld b:reads :fr .\n:pld b:writes :fapp .\n"
+    )
+    p = tmp_path / "reread.out"
+    p.write_text(text)
+    return p
+
+
+def test_reading_back_an_open_write_is_the_write(tmp_path):
+    rep = _verdict(_reread_out(tmp_path, write_first=True))
+    assert rep.verdict == "GREEN"
+
+
+def test_a_prebuilt_rewritten_with_its_own_bytes_is_not_vouched_for(tmp_path):
+    """Read first, then written at the same path with the same content: the
+    write may be a copy of the prebuilt, so it proves nothing about it."""
+    rep = _verdict(_reread_out(tmp_path, write_first=False))
+    assert rep.verdict != "GREEN"

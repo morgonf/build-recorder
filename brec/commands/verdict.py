@@ -339,7 +339,26 @@ class Report:
     # Toolchain runtime objects linked in (exempt by name), with their package.
     runtime: dict[str, str] = field(default_factory=dict)
 
+    def lineages(self) -> tuple[list[tuple[list[str], list[str]]], list[int]]:
+        """Distinct (foreign, unattributed) leaf lists, and each finding's index.
+
+        Files one producer wrote share their lineage: on a Maven build ten
+        thousand findings name the same few hundred jars, and spelling them out
+        per finding made a 1 GB report.
+        """
+        table: list[tuple[list[str], list[str]]] = []
+        seen: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
+        index: list[int] = []
+        for f in self.findings:
+            k = (tuple(f.foreign_leaves), tuple(f.unattributed_leaves))
+            if k not in seen:
+                seen[k] = len(table)
+                table.append((f.foreign_leaves, f.unattributed_leaves))
+            index.append(seen[k])
+        return table, index
+
     def to_dict(self) -> dict:
+        table, index = self.lineages()
         return {
             "verdict": self.verdict,
             "produced_files": self.produced,
@@ -348,9 +367,12 @@ class Report:
             "fidelity": round(self.fidelity, 4),
             "findings": [
                 {"artifact": f.artifact, "verdict": f.verdict,
-                 "reason": f.reason, "foreign_leaves": f.foreign_leaves,
-                 "unattributed_leaves": f.unattributed_leaves}
-                for f in self.findings
+                 "reason": f.reason, "lineage": i}
+                for f, i in zip(self.findings, index)
+            ],
+            "lineages": [
+                {"foreign_leaves": fl, "unattributed_leaves": ul}
+                for fl, ul in table
             ],
             "coverage_gaps": [
                 {"process": g.proc, "kind": g.kind, "cmd": g.cmd}
@@ -435,15 +457,23 @@ def _condense(
                     break
 
             cid = len(comp_leaves)
-            collected: set[str] = set()
             for member in members:
                 comp_of[member] = cid
-                collected |= direct.get(member, set())
+            own: set[str] = set()
             for member in members:
-                for nxt in inputs.get(member, ()):
-                    other = comp_of.get(nxt)
-                    if other is not None and other != cid:
-                        collected |= comp_leaves[other]
+                own |= direct.get(member, set())
+            reached = {
+                comp_of[nxt]
+                for member in members for nxt in inputs.get(member, ())
+                if comp_of.get(nxt) is not None and comp_of[nxt] != cid
+            }
+            if not own and len(reached) == 1:
+                # A copy of a copy adds nothing: share the set, don't clone it.
+                collected = comp_leaves[next(iter(reached))]
+            else:
+                collected = own
+                for other in reached:
+                    collected |= comp_leaves[other]
             comp_leaves.append(collected)
 
     return comp_of, comp_leaves
@@ -575,36 +605,93 @@ def compute_verdict(
     # single node removes the question: whatever a cycle reads is lineage for
     # every file in it, whichever way the walk enters.
 
-    inputs: dict[str, set[str]] = {}     # produced -> produced (edges)
-    direct: dict[str, set[str]] = {}     # produced -> terminal inputs (leaves)
+    # A read node with the path and the content of a node this build wrote is
+    # that content, read before the tracer could tell: the tracer hashes a
+    # read at open() and enters a write in its cache only at close(), so a
+    # file read while still open for writing gets a node of its own with no
+    # writer (go reopens _pkg_.a to read it while rewriting its build id).
+    # Equal hashes are equal bytes, so the read is an edge to the write.
+    # Only to a write that was opened before the read: a prebuilt read first
+    # and then rewritten in place with the same bytes would otherwise vouch
+    # for itself.  Node order in the trace is creation order.
+    order = {uri: i for i, uri in enumerate(files)}
+    produced_at: dict[tuple[str, str], str] = {}
     for furi in produced:
-        ins: set[str] = set()
-        lvs: set[str] = set()
+        fn = files.get(furi)
+        if fn is not None and fn.git_blob_sha1:
+            produced_at.setdefault((fn.abspath, fn.git_blob_sha1), furi)
+
+    def twin_of(r: str) -> str | None:
+        fn = files.get(r)
+        if fn is None or not fn.git_blob_sha1:
+            return None
+        twin = produced_at.get((fn.abspath, fn.git_blob_sha1))
+        if twin is None or order.get(twin, -1) > order.get(r, -1):
+            return None
+        return twin
+
+    # The walk runs over producers, not files.  Every file one set of
+    # processes wrote has the same inputs, so per-file leaf sets were the same
+    # set over and over: a Maven build writes 11 thousand files from one JVM
+    # that read 15 thousand, and the verdict ran out of 13 GB.  A producer is
+    # the set of processes that wrote a file, or the copy it was made by.
+    def key_of(furi: str) -> str:
+        if furi in copy_src:
+            return "copy " + copy_src[furi]
+        return " ".join(sorted({p.uri for p in writer_procs.get(furi, [])}))
+
+    file_key = {furi: key_of(furi) for furi in produced}
+    keys = set(file_key.values())
+
+    inputs: dict[str, set[str]] = {k: set() for k in keys}   # key -> keys
+    direct: dict[str, set[str]] = {k: set() for k in keys}   # key -> leaves
+
+    reads_of: dict[str, set[str]] = {}     # process -> its edges and leaves
+    def process_inputs(p) -> tuple[set[str], set[str]]:
+        if p.uri not in reads_of:
+            ins: set[str] = set()
+            lvs: set[str] = set()
+            for r in p.reads:
+                if r in produced:
+                    ins.add(file_key[r])
+                    # A file that reads itself is its own earlier content; it
+                    # stays a leaf, as it always was.
+                    if p in writer_procs.get(r, []):
+                        lvs.add(r)
+                elif (twin := twin_of(r)) is not None:
+                    ins.add(file_key[twin])
+                else:
+                    lvs.add(r)
+            reads_of[p.uri] = (ins, lvs)
+        return reads_of[p.uri]
+
+    for furi in produced:
+        k = file_key[furi]
         if furi in copy_src:                      # content is the copy source
             src = copy_src[furi]
-            (ins if src in produced else lvs).add(src)
-        elif furi in writer_procs:                # produced by a process
-            for p in writer_procs[furi]:
-                for r in p.reads:
-                    # A file that reads itself is its own earlier content, not
-                    # an edge to follow; it stays a leaf, as it always was.
-                    if r in produced and r != furi:
-                        ins.add(r)
-                    else:
-                        lvs.add(r)
-        inputs[furi] = ins
-        direct[furi] = lvs
+            if src in produced:
+                inputs[k].add(file_key[src])
+            else:
+                direct[k].add(src)
+        else:                                     # produced by processes
+            for p in writer_procs.get(furi, []):
+                ins, lvs = process_inputs(p)
+                inputs[k] |= ins
+                direct[k] |= lvs
+    for k in keys:
+        inputs[k].discard(k)        # its own output brings nothing in
 
-    comp_of, comp_leaves = _condense(produced, inputs, direct)
+    comp_of, comp_leaves = _condense(sorted(keys), inputs, direct)
 
     def leaves(furi: str) -> set[str]:
-        cid = comp_of.get(furi)
+        cid = comp_of.get(file_key.get(furi, ""))
         return comp_leaves[cid] if cid is not None else set()
 
     findings: list[Finding] = []
     leaf_pkg: dict[str, str] = {}        # prebuilt abspath -> package, "" if none
     runtime_used: dict[str, str] = {}    # toolchain runtime abspath -> package
     verdict_by_uri: dict[str, str] = {}
+    classified: dict[int, tuple[list[str], list[str]]] = {}
     green = red = grey = 0
     real = 0
     # In graph order, not set order: the findings below are printed in the order
@@ -618,16 +705,20 @@ def compute_verdict(
         if real_art:
             real += 1
         ls = leaves(furi)
-        foreign_uris = [l for l in ls if is_foreign_binary(l)]
-        foreign = sorted(files[l].abspath for l in foreign_uris)
-        for l in foreign_uris:
-            leaf_pkg.setdefault(files[l].abspath, package_of(l))
-        for l in ls:
-            if is_runtime_binary(l):
-                runtime_used.setdefault(files[l].abspath, package_of(l))
-        unattributed = sorted(
-            files[l].abspath for l in ls if is_unattributed_binary(l)
-        )
+        # Files of one producer share one leaf set: classify it once.
+        # comp_leaves keeps every set alive, so its id() is stable.
+        if id(ls) not in classified:
+            foreign_uris = [l for l in ls if is_foreign_binary(l)]
+            for l in foreign_uris:
+                leaf_pkg.setdefault(files[l].abspath, package_of(l))
+            for l in ls:
+                if is_runtime_binary(l):
+                    runtime_used.setdefault(files[l].abspath, package_of(l))
+            classified[id(ls)] = (
+                sorted(files[l].abspath for l in foreign_uris),
+                sorted(files[l].abspath for l in ls if is_unattributed_binary(l)),
+            )
+        foreign, unattributed = classified[id(ls)]
         written_through_gap = any(
             p.uri in gap_procs for p in writer_procs.get(furi, [])
         )
@@ -867,10 +958,17 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append("      operations on the ring bypass syscall observation; "
                      "files it opened or wrote may be missing from the graph")
 
-    for f in rep.findings:
+    _, index = rep.lineages()
+    first_of: dict[int, str] = {}
+    for f, i in zip(rep.findings, index):
         lines.append("")
         lines.append(f"  {_BANNER[f.verdict]}  {f.artifact}")
         lines.append(f"      {f.reason}")
+        n = len(f.foreign_leaves) + len(f.unattributed_leaves)
+        if i in first_of and n > 1:
+            lines.append(f"      ← the same {n} leaves as {first_of[i]}")
+            continue
+        first_of.setdefault(i, f.artifact)
         for leaf in f.foreign_leaves:
             pkg = rep.prebuilt_packages.get(leaf)
             lines.append(f"      ← prebuilt: {leaf}" + (f"  [{pkg}]" if pkg else ""))
