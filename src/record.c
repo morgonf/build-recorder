@@ -247,6 +247,15 @@ record_hash(char *foutname, char *hash)
 	record_triple(foutname, "b:hash", hash, true);
 }
 
+// The format a file's content is in (elf, ar, zip, gzip, ...), when it is one
+// of the binary formats get_file_kind() knows.
+void
+record_kind(char *foutname, const char *kind)
+{
+    if (kind != NULL)
+	record_triple(foutname, "b:kind", (char *) kind, true);
+}
+
 void
 record_process_create(char *p1outname, char *p2outname)
 {

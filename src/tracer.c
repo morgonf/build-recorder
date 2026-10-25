@@ -15,6 +15,7 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<string.h>
 #include	<unistd.h>
 #include	<fcntl.h>
+#include	<dirent.h>
 
 #include	<sys/ptrace.h>
 #include	<linux/ptrace.h>
@@ -243,6 +244,15 @@ pinfo_count_outname(PROCESS_INFO *self, const char *outname)
     return n;
 }
 
+// A node's content: its hash, and its format when that is a binary one.
+static void
+record_content(char *foutname, char *abspath, char *hash)
+{
+    record_hash(foutname, hash);
+    if (hash != NULL)
+	record_kind(foutname, get_file_kind(abspath));
+}
+
 // Drop one descriptor, hashing the file if this was the last one naming it.
 static void
 pinfo_close_fd(PROCESS_INFO *self, int fd)
@@ -257,7 +267,7 @@ pinfo_close_fd(PROCESS_INFO *self, int fd)
     // An entry already hashed at a rename that then failed keeps that hash.
     if (f->hash == NULL && pinfo_count_outname(self, f->outname) == 1) {
 	f->hash = get_file_hash(f->abspath);
-	record_hash(f->outname, f->hash);
+	record_content(f->outname, f->abspath, f->hash);
 
 	// Add it to global cache list
 	*next_finfo() = *f;
@@ -395,7 +405,7 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 	    f = next_finfo();
 	    finfo_new(f, path, abspath, hash);
 	    record_file(f->outname, path, abspath);
-	    record_hash(f->outname, hash);
+	    record_content(f->outname, abspath, hash);
 	} else {
 	    free(path);
 	    free(abspath);
@@ -408,6 +418,102 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     }
 
     record_fileuse(pi->outname, f->outname, purpose);
+}
+
+/*
+ * A write entry some other process holds open on abspath, or NULL.
+ */
+static FILE_INFO *
+find_open_write_elsewhere(PROCESS_INFO *self, const char *abspath)
+{
+    for (int i = numpinfo; i >= 0; --i) {
+	PROCESS_INFO *p = pinfo + i;
+
+	if (p == self || p->is_thread)
+	    continue;
+	for (int j = p->numfinfo; j >= 0; --j)
+	    if (p->finfo[j].hash == NULL
+		&& !strcmp(p->finfo[j].abspath, abspath))
+		return p->finfo + j;
+    }
+    return NULL;
+}
+
+/*
+ * Files a program writes through descriptors it was handed rather than opened.
+ * A shell redirection is opened by the shell, and the program it runs writes
+ * there: ./gen > gen.c, gzip -dc lib.a.gz > lib.a.  With no edge the output's
+ * only writer was the shell, and the program that made its bytes was not in
+ * its lineage.  After the exec, what is still open for writing (close-on-exec
+ * descriptors are gone by then) is matched to the write entries of the
+ * processes that opened it.  A forked child that never execs is not seen.
+ */
+static void
+record_inherited_writes(pid_t pid, PROCESS_INFO *pi)
+{
+    char name[64];
+
+    snprintf(name, sizeof name, "/proc/%d/fd", pid);
+
+    DIR *dir = opendir(name);
+
+    if (dir == NULL)
+	return;
+
+    PROCESS_INFO *self = fd_owner(pi);
+    char done[16][16];
+    int ndone = 0;
+    struct dirent *e;
+
+    while ((e = readdir(dir)) != NULL) {
+	if (e->d_name[0] == '.')
+	    continue;
+
+	int fd = atoi(e->d_name);
+
+	snprintf(name, sizeof name, "/proc/%d/fdinfo/%d", pid, fd);
+
+	FILE *info = fopen(name, "r");
+	unsigned int flags = 0;
+	int known = 0;
+	char line[128];
+
+	if (info == NULL)
+	    continue;
+	while (!known && fgets(line, sizeof line, info) != NULL)
+	    known = sscanf(line, "flags: %o", &flags) == 1;
+	fclose(info);
+	if (!known || (flags & O_ACCMODE) == O_RDONLY)
+	    continue;
+
+	char target[PATH_MAX];
+
+	snprintf(name, sizeof name, "/proc/%d/fd/%d", pid, fd);
+
+	ssize_t n = readlink(name, target, sizeof target - 1);
+
+	if (n <= 0)
+	    continue;
+	target[n] = '\0';
+	if (target[0] != '/')	       // pipe:[...], socket:[...]
+	    continue;
+
+	FILE_INFO *w = find_open_write_elsewhere(self, target);
+
+	if (w == NULL)
+	    continue;
+
+	int seen = 0;
+
+	for (int i = 0; i < ndone && !seen; ++i)
+	    seen = !strcmp(done[i], w->outname);
+	if (seen)
+	    continue;
+	if (ndone < 16)
+	    strcpy(done[ndone++], w->outname);
+	record_fileuse(pi->outname, w->outname, O_WRONLY);
+    }
+    closedir(dir);
 }
 
 static void
@@ -439,7 +545,7 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 
 	finfo_new(f, path, abspath, hash);
 	record_file(f->outname, path, abspath);
-	record_hash(f->outname, f->hash);
+	record_content(f->outname, f->abspath, f->hash);
     } else {
 	free(abspath);
 	free(hash);
@@ -447,6 +553,7 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
     }
 
     record_exec(pi->outname, f->outname);
+    record_inherited_writes(pid, pi);
 }
 
 /*
@@ -512,7 +619,7 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
 
     if (open != NULL) {
 	open->hash = hash;
-	record_hash(open->outname, hash);
+	record_content(open->outname, abspath, hash);
 
 	// Copied by value: next_finfo() moves only the global array, but the
 	// owner's entries are rebound at the exit and must not alias it.
@@ -532,7 +639,7 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
 	f = next_finfo();
 	finfo_new(f, oldpath, abspath, hash);
 	record_file(f->outname, oldpath, abspath);
-	record_hash(f->outname, f->hash);
+	record_content(f->outname, f->abspath, f->hash);
     } else {
 	free(oldpath);
 	free(abspath);
@@ -570,7 +677,7 @@ handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 
     finfo_new(to, newpath, abspath, from->hash);
     record_file(to->outname, newpath, abspath);
-    record_hash(to->outname, to->hash);
+    record_content(to->outname, to->abspath, to->hash);
 
     record_rename(pi->outname, from->outname, to->outname);
 
@@ -606,7 +713,7 @@ handle_link_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 
     finfo_new(to, newpath, abspath, from->hash);
     record_file(to->outname, newpath, abspath);
-    record_hash(to->outname, to->hash);
+    record_content(to->outname, to->abspath, to->hash);
 
     record_hardlink(pi->outname, from->outname, to->outname);
 
@@ -743,7 +850,7 @@ reap_process(pid_t pid)
 	    continue;
 
 	f->hash = get_file_hash(f->abspath);
-	record_hash(f->outname, f->hash);
+	record_content(f->outname, f->abspath, f->hash);
 
 	// As at close(): a later reader of this content must find this node,
 	// or it gets a writerless node of its own.
@@ -1066,6 +1173,12 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 	pid = wait(&status);
 
 	if (pid < 0) {
+	    // No tracee left while some are still counted: a thread that calls
+	    // execve takes over its group leader's pid, and its own tid is never
+	    // reported again (ptrace(2), "execve(2) under ptrace").  go does it
+	    // when it switches to a toolchain it downloaded.
+	    if (errno == ECHILD)
+		break;
 	    error(EXIT_FAILURE, errno, "wait failed");
 	}
 

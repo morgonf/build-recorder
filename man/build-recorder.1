@@ -75,6 +75,9 @@ The file size in bytes. (Range: xsd:integer)
 .B b:hash
 A hexadecimal string representing a unique, git-compatible hash of the file's content. (Range: xsd:string)
 .TP
+.B b:kind
+The format of the file's content, read from its first bytes when it is hashed: "elf-rel", "elf-exec", "elf-dyn" or "elf" by ELF type, "ar", "class", "macho", "pe", "bitcode", "wasm" for compiled code, "zip", "gzip", "xz", "zstd", "bzip2", "7z", "lz4", "rpm", "tar" for archives. Absent for anything else, text above all. Lets an analysis tell code from text whatever a file is named. (Range: xsd:string)
+.TP
 .B b:abspath
 The absolute path of the file. (Range: xsd:string)
 

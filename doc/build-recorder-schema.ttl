@@ -67,6 +67,12 @@ b:hash a rdf:Property ;
     rdfs:range xsd:string ;
     rdfs:comment "A hexadecimal string representing a unique, git-compatible hash of the file's content." .
 
+b:kind a rdf:Property ;
+    rdfs:label "File content kind" ;
+    rdfs:domain b:file ;
+    rdfs:range xsd:string ;
+    rdfs:comment "The format of the file's content by its first bytes (elf-rel, elf-exec, elf-dyn, ar, class, zip, gzip, ...), absent for text and unknown formats." .
+
 b:abspath a rdf:Property ;
     rdfs:label "File absolute path" ;
     rdfs:domain b:file ;

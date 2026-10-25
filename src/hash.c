@@ -176,6 +176,85 @@ hash_file_contents(char *name, size_t sz)
     return ret;
 }
 
+/* An ELF file by its e_type: an object file is code a linker copies in, an
+ * executable or a shared object is not. */
+static const char *
+elf_kind(const unsigned char *buf, ssize_t n)
+{
+    if (n < 18)
+	return "elf";
+
+    // e_type is a half-word at offset 16, in the byte order EI_DATA names.
+    unsigned type = buf[5] == 2 ? (buf[16] << 8 | buf[17])
+	: (buf[17] << 8 | buf[16]);
+
+    switch (type) {
+	case 1:
+	    return "elf-rel";
+	case 2:
+	    return "elf-exec";
+	case 3:
+	    return "elf-dyn";
+	default:
+	    return "elf";
+    }
+}
+
+/* What a file's first bytes say it is, for the formats that carry compiled
+ * code or pack other files: a .a renamed to .txt, or a library inside a
+ * tarball, is no longer told apart by its name.  Returns a static string, or
+ * NULL for anything else (text above all). */
+const char *
+get_file_kind(const char *fname)
+{
+    static const struct {
+	size_t off;
+	size_t len;
+	const char *magic;
+	const char *kind;
+    } sigs[] = {
+	{0, 4, "\x7f" "ELF", "elf"},	// first: refined by elf_kind()
+	{0, 8, "!<arch>\n", "ar"},
+	{0, 8, "!<thin>\n", "ar"},
+	{0, 4, "\xca\xfe\xba\xbe", "class"},	// also a fat Mach-O
+	{0, 4, "\xfe\xed\xfa\xce", "macho"},
+	{0, 4, "\xfe\xed\xfa\xcf", "macho"},
+	{0, 4, "\xce\xfa\xed\xfe", "macho"},
+	{0, 4, "\xcf\xfa\xed\xfe", "macho"},
+	{0, 2, "MZ", "pe"},
+	{0, 4, "BC\xc0\xde", "bitcode"},
+	{0, 4, "\0asm", "wasm"},
+	{0, 4, "PK\x03\x04", "zip"},
+	{0, 4, "PK\x05\x06", "zip"},
+	{0, 2, "\x1f\x8b", "gzip"},
+	{0, 6, "\xfd" "7zXZ\0", "xz"},
+	{0, 4, "\x28\xb5\x2f\xfd", "zstd"},
+	{0, 3, "BZh", "bzip2"},
+	{0, 6, "7z\xbc\xaf\x27\x1c", "7z"},
+	{0, 4, "\x04\x22\x4d\x18", "lz4"},
+	{0, 4, "\xed\xab\xee\xdb", "rpm"},
+	{257, 5, "ustar", "tar"},
+    };
+    unsigned char buf[262];
+    int fd = open(fname, O_RDONLY | O_NONBLOCK);
+
+    if (fd < 0)
+	return NULL;
+
+    ssize_t n = read(fd, buf, sizeof buf);
+
+    close(fd);
+    if (n <= 0)
+	return NULL;
+
+    for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
+	if ((size_t) n >= sigs[i].off + sigs[i].len
+	    && !memcmp(buf + sigs[i].off, sigs[i].magic, sigs[i].len))
+	    return i == 0 ? elf_kind(buf, n) : sigs[i].kind;
+    }
+    return NULL;
+}
+
 char *
 get_file_hash(char *fname)
 {
