@@ -16,6 +16,7 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<unistd.h>
 #include	<fcntl.h>
 #include	<dirent.h>
+#include	<ctype.h>
 
 #include	<sys/ptrace.h>
 #include	<linux/ptrace.h>
@@ -303,6 +304,291 @@ pinfo_dup_fd(PROCESS_INFO *self, int oldfd, int newfd)
     *pinfo_next_finfo(self, newfd) = copy;
 }
 
+/*
+ * Which members of a static archive went into a link.
+ *
+ * Reading libz.a says nothing about which of its objects the result holds.  The
+ * linker knows, and so does gcc's LTO plugin, which the gcc driver loads into
+ * every link (ld.bfd and ld.gold alike): the linker hands it each object it
+ * decides to load, archive members included, and the plugin reads that
+ * object's ELF header, in a short read starting at the member's first byte.
+ * The linker's own reads of the archive go through 4 KiB buffers and cover
+ * neighbours it never loads, so only the short read at a member's start counts.
+ * Without the plugin the members cannot be told from the syscalls (ld.gold maps
+ * the archive).  That case needs no mark of its own: the plugin's open is in
+ * the graph like any other read, so a linker that read an archive but not the
+ * plugin is one whose members are unknown.  The tracer cannot tell a linker
+ * from go's compiler reading a package archive; the analysis can.
+ * The experiment behind this is experiments/ar-members/.
+ */
+#define	AR_SHORT_READ	4096
+
+AR_INFO *arinfo;
+int numarinfo;
+int arinfo_size;
+
+// The member table of the archive at abspath, or 0 if it is not a regular ar
+// archive (a thin one names its members as files of their own, which open(2)
+// already shows).
+static int
+ar_parse(const char *abspath, AR_INFO *a)
+{
+    int fd = open(abspath, O_RDONLY | O_CLOEXEC);
+    char hdr[60];
+    char *longnames = NULL;
+    int64_t longsize = 0;
+    int64_t off = 8;
+    int cap = 0;
+
+    if (fd < 0)
+	return 0;
+    if (pread(fd, hdr, 8, 0) != 8 || memcmp(hdr, "!<arch>\n", 8)) {
+	close(fd);
+	return 0;
+    }
+
+    a->m = NULL;
+    a->nm = 0;
+
+    while (pread(fd, hdr, 60, off) == 60 && hdr[58] == '`' && hdr[59] == '\n') {
+	char field[17];
+
+	memcpy(field, hdr + 48, 10);
+	field[10] = '\0';
+
+	int64_t size = strtoll(field, NULL, 10);
+	int64_t start = off + 60;
+	int64_t len = size;
+
+	memcpy(field, hdr, 16);
+	field[16] = '\0';
+	for (int i = 15; i >= 0 && field[i] == ' '; --i)
+	    field[i] = '\0';
+
+	char *name = NULL;
+
+	if (!strcmp(field, "//")) {
+	    // GNU long-name table: names end in "/\n", members point in by offset.
+	    free(longnames);
+	    longnames = malloc(size + 1);
+	    if (longnames != NULL && pread(fd, longnames, size, start) == size) {
+		longnames[size] = '\0';
+		longsize = size;
+	    }
+	} else if (!strcmp(field, "/") || !strcmp(field, "/SYM64/")) {
+	    // the symbol table
+	} else if (field[0] == '/' && isdigit((unsigned char) field[1])) {
+	    long at = atol(field + 1);
+
+	    if (longnames != NULL && at < longsize) {
+		char *end = strstr(longnames + at, "/\n");
+
+		name = end ? strndup(longnames + at, end - (longnames + at))
+		    : strdup(longnames + at);
+	    }
+	} else if (!strncmp(field, "#1/", 3)) {
+	    // BSD: the name is the first bytes of the data.
+	    int64_t n = atol(field + 3);
+
+	    name = malloc(n + 1);
+	    if (name != NULL && pread(fd, name, n, start) == n) {
+		name[n] = '\0';
+		start += n;
+		len -= n;
+	    } else {
+		free(name);
+		name = NULL;
+	    }
+	} else {
+	    size_t n = strlen(field);
+
+	    if (n > 0 && field[n - 1] == '/')
+		field[n - 1] = '\0';
+	    name = strdup(field);
+	}
+
+	if (name != NULL) {
+	    if (a->nm == cap) {
+		cap = cap ? cap * 2 : 16;
+		a->m = reallocarray(a->m, cap, sizeof (AR_MEMBER));
+		if (a->m == NULL)
+		    error(EXIT_FAILURE, errno, "reallocating archive members");
+	    }
+	    AR_MEMBER *m = a->m + a->nm++;
+
+	    m->name = name;
+	    m->start = start;
+	    m->size = len;
+	    m->outname[0] = '\0';
+	    m->lastp[0] = '\0';
+	}
+
+	off += 60 + size + (size & 1);
+    }
+
+    free(longnames);
+    close(fd);
+    return 1;
+}
+
+// The archive table entry for a file node, parsing it on first sight; -1 if
+// the file is not an archive.
+static int
+ar_lookup(FILE_INFO *f)
+{
+    for (int i = 0; i < numarinfo; ++i)
+	if (!strcmp(arinfo[i].foutname, f->outname))
+	    return i;
+
+    AR_INFO a;
+
+    if (!ar_parse(f->abspath, &a))
+	return -1;
+
+    if (numarinfo == arinfo_size) {
+	arinfo_size = arinfo_size ? arinfo_size * 2 : 8;
+	arinfo = reallocarray(arinfo, arinfo_size, sizeof (AR_INFO));
+	if (arinfo == NULL)
+	    error(EXIT_FAILURE, errno, "reallocating archive table");
+    }
+    strcpy(a.foutname, f->outname);
+    a.abspath = strdup(f->abspath);
+    arinfo[numarinfo] = a;
+    return numarinfo++;
+}
+
+static AR_FD *
+ar_find_fd(PROCESS_INFO *self, int fd)
+{
+    for (int i = 0; i < self->narfds; ++i)
+	if (self->arfds[i].fd == fd)
+	    return self->arfds + i;
+
+    return NULL;
+}
+
+static void
+ar_add_fd(PROCESS_INFO *self, int fd, int ar, AR_OFD *ofd)
+{
+    if (self->narfds == self->arfds_size) {
+	self->arfds_size = self->arfds_size ? self->arfds_size * 2 : 4;
+	self->arfds = reallocarray(self->arfds, self->arfds_size, sizeof (AR_FD));
+	if (self->arfds == NULL)
+	    error(EXIT_FAILURE, errno, "reallocating archive descriptors");
+    }
+    AR_FD *a = self->arfds + self->narfds++;
+
+    ++ofd->refs;
+    a->fd = fd;
+    a->ar = ar;
+    a->ofd = ofd;
+}
+
+static void
+ar_close_fd(PROCESS_INFO *pi, int fd)
+{
+    PROCESS_INFO *self = fd_owner(pi);
+    AR_FD *a = ar_find_fd(self, fd);
+
+    if (a == NULL)
+	return;
+    if (--a->ofd->refs == 0)
+	free(a->ofd);
+    *a = self->arfds[--self->narfds];
+}
+
+static void
+ar_dup_fd(PROCESS_INFO *pi, int oldfd, int newfd)
+{
+    PROCESS_INFO *self = fd_owner(pi);
+
+    if (oldfd == newfd)
+	return;
+    ar_close_fd(pi, newfd);
+
+    AR_FD *a = ar_find_fd(self, oldfd);
+
+    if (a != NULL)
+	ar_add_fd(self, newfd, a->ar, a->ofd);
+}
+
+// A file opened for reading: the LTO plugin itself, or an archive to follow.
+static void
+ar_note_open(PROCESS_INFO *pi, int fd, FILE_INFO *f)
+{
+    PROCESS_INFO *self = fd_owner(pi);
+    const char *base = strrchr(f->abspath, '/');
+
+    base = base ? base + 1 : f->abspath;
+    if (!strncmp(base, "liblto_plugin", 13)) {
+	self->lto_plugin = 1;
+	return;
+    }
+
+    int ar = ar_lookup(f);
+
+    if (ar < 0)
+	return;
+
+    AR_OFD *ofd = calloc(1, sizeof *ofd);
+
+    if (ofd == NULL)
+	error(EXIT_FAILURE, errno, "allocating archive offset");
+    ar_add_fd(self, fd, ar, ofd);
+}
+
+// A read of count bytes at start through fd: a member loaded, if it is a short
+// read at that member's first byte.
+static void
+ar_note_read(PROCESS_INFO *pi, int fd, int64_t start, uint64_t count)
+{
+    PROCESS_INFO *self = fd_owner(pi);
+    AR_FD *a = ar_find_fd(self, fd);
+
+    if (a == NULL || count >= AR_SHORT_READ || !self->lto_plugin)
+	return;
+
+    AR_INFO *ai = arinfo + a->ar;
+    int lo = 0, hi = ai->nm - 1;
+
+    while (lo <= hi) {
+	int mid = (lo + hi) / 2;
+
+	if (ai->m[mid].start < start)
+	    lo = mid + 1;
+	else if (ai->m[mid].start > start)
+	    hi = mid - 1;
+	else {
+	    AR_MEMBER *m = ai->m + mid;
+
+	    if (!strcmp(m->lastp, pi->outname))
+		return;
+	    if (m->outname[0] == '\0') {
+		static int mcount = 0;
+		char *hash = get_range_hash(ai->abspath, m->start, m->size);
+
+		sprintf(m->outname, ":m%d", mcount++);
+		record_member(m->outname, ai->foutname, m->name, hash);
+		free(hash);
+	    }
+	    record_loads_member(pi->outname, m->outname);
+	    strcpy(m->lastp, pi->outname);
+	    return;
+	}
+    }
+}
+
+static void
+ar_free_fds(PROCESS_INFO *self)
+{
+    while (self->narfds > 0)
+	if (--self->arfds[--self->narfds].ofd->refs == 0)
+	    free(self->arfds[self->narfds].ofd);
+    free(self->arfds);
+    self->arfds = NULL;
+    self->arfds_size = 0;
+}
+
 char *
 get_str_from_process(pid_t pid, void *addr)
 {
@@ -418,6 +704,8 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     }
 
     record_fileuse(pi->outname, f->outname, purpose);
+    if ((purpose & O_ACCMODE) == O_RDONLY)
+	ar_note_open(pi, fd, f);
 }
 
 /*
@@ -521,6 +809,7 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 {
     record_process_start(pid, pi->outname, !pi->declared);
     pi->declared = 1;
+    fd_owner(pi)->lto_plugin = 0;
 
     char *abspath = absolutepath(pid, dirfd, path);
 
@@ -864,6 +1153,7 @@ reap_process(pid_t pid)
 
     free(process_state->finfo);
     free(process_state->fds);
+    ar_free_fds(process_state);
 
     for (int i = process_state - pinfo; i < numpinfo; ++i) {
 	pinfo[i] = pinfo[i + 1];
@@ -1002,6 +1292,7 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    fd = (int) pi->args[0];
 
 	    pinfo_close_fd(pi, fd);
+	    ar_close_fd(pi, fd);
 	    break;
 #endif
 #ifdef HAVE_SYS_EXECVE
@@ -1092,25 +1383,30 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	case SYS_dup:
 	    // int dup(int oldfd);  the new descriptor is the return value
 	    pinfo_dup_fd(pi, (int) pi->args[0], (int) rval);
+	    ar_dup_fd(pi, (int) pi->args[0], (int) rval);
 	    break;
 #endif
 #ifdef HAVE_SYS_DUP2
 	case SYS_dup2:
 	    // int dup2(int oldfd, int newfd);
 	    pinfo_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
+	    ar_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
 	    break;
 #endif
 #ifdef HAVE_SYS_DUP3
 	case SYS_dup3:
 	    // int dup3(int oldfd, int newfd, int flags);
 	    pinfo_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
+	    ar_dup_fd(pi, (int) pi->args[0], (int) pi->args[1]);
 	    break;
 #endif
 #ifdef HAVE_SYS_FCNTL
 	case SYS_fcntl:
 	    // int fcntl(int fd, int cmd, ...);  F_DUPFD is a dup by another name
-	    if ((int) pi->args[1] == F_DUPFD || (int) pi->args[1] == F_DUPFD_CLOEXEC)
+	    if ((int) pi->args[1] == F_DUPFD || (int) pi->args[1] == F_DUPFD_CLOEXEC) {
 		pinfo_dup_fd(pi, (int) pi->args[0], (int) rval);
+		ar_dup_fd(pi, (int) pi->args[0], (int) rval);
+	    }
 	    break;
 #endif
 #ifdef HAVE_SYS_CLONE3
@@ -1120,6 +1416,42 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
 	    // creation was invisible and every thread arrived as a tracee with
 	    // no parent.
 	    handle_create_process(pi, rval);
+	    break;
+#endif
+#ifdef HAVE_SYS_LSEEK
+	case SYS_lseek:
+	    // off_t lseek(int fd, off_t offset, int whence);  the new position
+	    // is the return value, whatever the whence
+	    fd = (int) pi->args[0];
+	    {
+		AR_FD *a = ar_find_fd(fd_owner(pi), fd);
+
+		if (a != NULL)
+		    a->ofd->pos = rval;
+	    }
+	    break;
+#endif
+#ifdef HAVE_SYS_READ
+	case SYS_read:
+	    // ssize_t read(int fd, void *buf, size_t count);
+	    fd = (int) pi->args[0];
+	    {
+		AR_FD *a = ar_find_fd(fd_owner(pi), fd);
+
+		if (a != NULL) {
+		    int64_t start = a->ofd->pos;
+
+		    a->ofd->pos += rval;
+		    ar_note_read(pi, fd, start, pi->args[2]);
+		}
+	    }
+	    break;
+#endif
+#ifdef HAVE_SYS_PREAD64
+	case SYS_pread64:
+	    // ssize_t pread(int fd, void *buf, size_t count, off_t offset);
+	    ar_note_read(pi, (int) pi->args[0], (int64_t) pi->args[3],
+			 pi->args[2]);
 	    break;
 #endif
 #ifdef HAVE_SYS_IO_URING_SETUP

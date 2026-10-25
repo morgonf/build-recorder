@@ -36,6 +36,41 @@ typedef struct {
  * and, while it's running, its current syscall number
  * and arguments.
  */
+/*
+ * A static archive's members, parsed once per content node: a node's outname
+ * stands for its bytes, so the same outname is the same member table.  A
+ * member's own node is written the first time a process is seen loading it.
+ */
+typedef struct {
+    char *name;
+    int64_t start;		       // first byte of the member's data
+    int64_t size;
+    char outname[16];		       // "" until the member's node is written
+    char lastp[16];		       // last process recorded as loading it
+} AR_MEMBER;
+
+typedef struct {
+    char foutname[16];
+    char *abspath;
+    AR_MEMBER *m;
+    int nm;
+} AR_INFO;
+
+/*
+ * A descriptor open on a static archive.  dup(2) copies share one file
+ * offset, as the kernel's do, so the position lives in a shared record.
+ */
+typedef struct {
+    int64_t pos;
+    int refs;
+} AR_OFD;
+
+typedef struct {
+    int fd;
+    int ar;			       // index into the archive table
+    AR_OFD *ofd;
+} AR_FD;
+
 typedef struct {
     char outname[16];
     int *fds;
@@ -50,6 +85,10 @@ typedef struct {
     char is_thread;		       // shares its subject with the group leader
     pid_t tgid;			       // its group leader, when is_thread
     unsigned int coverage_gaps;
+    AR_FD *arfds;		       // descriptors open on static archives
+    int narfds;
+    int arfds_size;
+    char lto_plugin;		       // this image loaded gcc's LTO plugin
 } PROCESS_INFO;
 
 /*

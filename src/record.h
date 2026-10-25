@@ -15,3 +15,5 @@ void record_kind(char *foutname, const char *kind);
 void record_process_create(char *p1outname, char *p2outname);
 void record_coverage_gap(char *poutname, const char *kind);
 void record_exec(char *poutname, char *foutname);
+void record_member(char *moutname, char *foutname, char *name, char *hash);
+void record_loads_member(char *poutname, char *moutname);

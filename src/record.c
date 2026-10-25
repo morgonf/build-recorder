@@ -271,6 +271,25 @@ record_coverage_gap(char *poutname, const char *kind)
     record_triple(poutname, "b:coverage_gap", (char *) kind, true);
 }
 
+// A member of a static archive, written once: the archive it sits in, its name
+// there and the hash of its bytes.
+void
+record_member(char *moutname, char *foutname, char *name, char *hash)
+{
+    record_triple(moutname, "a", "b:member", false);
+    record_triple(moutname, "b:member_of", foutname, false);
+    record_triple(moutname, "b:name", name, true);
+    record_hash(moutname, hash);
+}
+
+// The process loaded this archive member as an object.  For a linker that is
+// a member which went into the link.
+void
+record_loads_member(char *poutname, char *moutname)
+{
+    record_triple(poutname, "b:loads_member", moutname, false);
+}
+
 void
 record_exec(char *poutname, char *foutname)
 {

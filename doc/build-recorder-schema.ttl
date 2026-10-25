@@ -122,6 +122,22 @@ b:coverage_gap a rdf:Property ;
     rdfs:range xsd:string ;
     rdfs:comment "Names a mechanism the process used that can perform file I/O without the syscalls this tracer observes (currently \"io_uring\"). Its reads and writes may be missing from the graph, so no completeness claim holds for this process." .
 
+b:member a rdfs:Class ;
+    rdfs:label "Archive member" ;
+    rdfs:comment "A member of a static archive (ar), as the object it stands for. Carries b:name (its name in the archive) and b:hash (git-blob hash of its bytes, the same as the extracted object's)." .
+
+b:member_of a rdf:Property ;
+    rdfs:label "Member of" ;
+    rdfs:domain b:member ;
+    rdfs:range b:file ;
+    rdfs:comment "The archive a member sits in." .
+
+b:loads_member a rdf:Property ;
+    rdfs:label "Loads member" ;
+    rdfs:domain b:process ;
+    rdfs:range b:member ;
+    rdfs:comment "The process loaded this archive member as an object; for a linker, the member went into the link. Seen through gcc's LTO plugin, which reads the header of every object the linker loads, so it is recorded only for a process that read liblto_plugin.so. A linker that read an archive but not the plugin has unknown members, not zero; this is not a coverage gap, since the file layer is complete." .
+
 # Package provenance (added by enrich.py post-processing)
 b:rpm_package a rdf:Property ;
     rdfs:label "RPM package (NEVRA)" ;

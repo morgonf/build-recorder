@@ -127,6 +127,31 @@ else
 fi
 echo "ok: planted prebuilt archive is RED"
 
+# Which members of an archive went into the link: gcc's LTO plugin reads the
+# header of each object the linker loads, and the trace names those members.
+# Without the plugin nothing can be said, and nothing is claimed.
+cd "$work"
+for n in one two three; do printf 'int m_%s(void){return 1;}\n' "$n" > "m_$n.c"; done
+gcc -c m_one.c m_two.c m_three.c && ar rcs libthree.a m_one.o m_two.o m_three.o
+printf 'int m_two(void);\nint main(void){return m_two() != 1;}\n' > two.c
+brec-collect -o members.tar.gz -- gcc two.c libthree.a -o two 2>/dev/null
+mkdir mem && tar -C mem -xzf members.tar.gz
+cd "$src"
+python3 - "$work/mem/trace.out" <<'PY'
+import re
+import sys
+
+t = open(sys.argv[1]).read()
+name = dict(re.findall(r'^(:m\d+)\s+b:name\s+"([^"]*)"', t, re.M))
+loaded = sorted({name[m] for m in re.findall(r'^:p\d+\s+b:loads_member\s+(:m\d+)', t, re.M)})
+if not re.search(r'b:abspath\s+"[^"]*liblto_plugin[^"]*"', t):
+    assert not loaded, f"members claimed without the LTO plugin: {loaded}"
+    print("skip: the linker loaded no LTO plugin, members not visible")
+else:
+    assert loaded == ["m_two.o"], f"loaded members {loaded}, expected only m_two.o"
+    print("ok: the trace names m_two.o as the one member linked from libthree.a")
+PY
+
 # Go, where the image has it: no cgo, and still two ways in for a prebuilt.
 # A .syso in the package directory is linked in as it is, and a warm build
 # cache hands the linker packages compiled outside the trace.  The cold build

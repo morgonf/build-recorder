@@ -176,6 +176,30 @@ hash_file_contents(char *name, size_t sz)
     return ret;
 }
 
+/* git-blob digest of the bytes [off, off + sz) of a file: an archive member's
+ * content, hashed the way the object would be if it stood on its own, so the
+ * same member found in another archive or extracted by ar(1) has the same
+ * hash.  Returns NULL if the range cannot be read whole. */
+char *
+get_range_hash(const char *fname, int64_t off, int64_t sz)
+{
+    int fd = open(fname, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0 || sz < 0) {
+	if (fd >= 0)
+	    close(fd);
+	return NULL;
+    }
+
+    unsigned char *buf = malloc(sz > 0 ? sz : 1);
+    ssize_t n = buf == NULL ? -1 : pread(fd, buf, sz, off);
+    char *ret = n == sz ? git_blob_digest(buf, sz) : NULL;
+
+    free(buf);
+    close(fd);
+    return ret;
+}
+
 /* An ELF file by its e_type: an object file is code a linker copies in, an
  * executable or a shared object is not. */
 static const char *
