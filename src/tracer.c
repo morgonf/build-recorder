@@ -200,6 +200,28 @@ pinfo_next_finfo(PROCESS_INFO *self, int fd)
 }
 
 /*
+ * The descriptor table a tracee's open, close and dup act on.
+ *
+ * Threads share one table, and Go moves a goroutine between threads at will:
+ * a cache file opened on one thread was closed on another, the close found no
+ * descriptor in that thread's list, and the written file was never hashed nor
+ * entered in the global cache. Whoever read it next got a node of its own,
+ * with no writer: the GREY that every Go build ended in. So a thread keeps its
+ * descriptors in its leader's list. The leader stays in the table until the
+ * last thread is gone, since the kernel reports its exit only then.
+ */
+static PROCESS_INFO *
+fd_owner(PROCESS_INFO *self)
+{
+    PROCESS_INFO *leader;
+
+    if (self->is_thread && (leader = find_pinfo(self->tgid)) != NULL)
+	return leader;
+
+    return self;
+}
+
+/*
  * How many descriptors of this process point at one file entry.
  *
  * A shell redirection is open(), dup2() onto the target descriptor, close() of
@@ -225,12 +247,15 @@ pinfo_count_outname(PROCESS_INFO *self, const char *outname)
 static void
 pinfo_close_fd(PROCESS_INFO *self, int fd)
 {
+    self = fd_owner(self);
+
     FILE_INFO *f = pinfo_find_finfo(self, fd);
 
     if (f == NULL)
 	return;
 
-    if (pinfo_count_outname(self, f->outname) == 1) {
+    // An entry already hashed at a rename that then failed keeps that hash.
+    if (f->hash == NULL && pinfo_count_outname(self, f->outname) == 1) {
 	f->hash = get_file_hash(f->abspath);
 	record_hash(f->outname, f->hash);
 
@@ -252,6 +277,8 @@ pinfo_close_fd(PROCESS_INFO *self, int fd)
 static void
 pinfo_dup_fd(PROCESS_INFO *self, int oldfd, int newfd)
 {
+    self = fd_owner(self);
+
     FILE_INFO *from = pinfo_find_finfo(self, oldfd);
 
     if (from == NULL || oldfd == newfd)
@@ -375,7 +402,7 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 	    free(hash);
 	}
     } else {
-	f = pinfo_next_finfo(pi, fd);
+	f = pinfo_next_finfo(fd_owner(pi), fd);
 	finfo_new(f, path, abspath, NULL);
 	record_file(f->outname, path, abspath);
     }
@@ -422,6 +449,53 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
     record_exec(pi->outname, f->outname);
 }
 
+/*
+ * A file renamed (or linked) while the process still holds it open for
+ * writing. rustc writes an archive to a temporary name and renames it into
+ * place before closing it, so the write node was still unhashed and absent from
+ * the global cache: the rename's source became a node of its own with no
+ * writer, and the close then hashed a path that no longer existed. Every crate
+ * of a cargo build ended GREY that way.
+ *
+ * So the rename is the write's end: hash it now and enter it in the cache, and
+ * the rename's source is that node. The descriptor stays open, though, and may
+ * be written further; at the syscall exit it is bound to a fresh write node at
+ * the path it now names (pinfo_rebind_write), which its close will hash.
+ */
+static FILE_INFO *
+pinfo_find_open_write(PROCESS_INFO *self, const char *abspath)
+{
+    for (int i = self->numfinfo; i >= 0; --i)
+	if (self->finfo[i].hash == NULL
+	    && !strcmp(self->finfo[i].abspath, abspath))
+	    return self->finfo + i;
+
+    return NULL;
+}
+
+static void
+pinfo_rebind_write(PROCESS_INFO *pi, const char *outname, char *path,
+		   char *abspath)
+{
+    PROCESS_INFO *self = fd_owner(pi);
+    FILE_INFO fresh;
+    int found = 0;
+
+    finfo_new(&fresh, path, abspath, NULL);
+
+    for (int i = 0; i <= self->numfinfo; ++i) {
+	if (strcmp(self->finfo[i].outname, outname))
+	    continue;
+	self->finfo[i] = fresh;
+	found = 1;
+    }
+
+    if (found) {
+	record_file(fresh.outname, path, abspath);
+	record_fileuse(pi->outname, fresh.outname, O_WRONLY);
+    }
+}
+
 static void
 handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
 {
@@ -433,6 +507,24 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
     }
 
     char *hash = get_file_hash(abspath);
+
+    FILE_INFO *open = pinfo_find_open_write(fd_owner(pi), abspath);
+
+    if (open != NULL) {
+	open->hash = hash;
+	record_hash(open->outname, hash);
+
+	// Copied by value: next_finfo() moves only the global array, but the
+	// owner's entries are rebound at the exit and must not alias it.
+	FILE_INFO done = *open;
+	FILE_INFO *f = next_finfo();
+
+	*f = done;
+	free(oldpath);
+	free(abspath);
+	pi->entry_info = (void *) (f - finfo);
+	return;
+    }
 
     FILE_INFO *f = find_finfo(abspath, hash);
 
@@ -481,6 +573,9 @@ handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
     record_hash(to->outname, to->hash);
 
     record_rename(pi->outname, from->outname, to->outname);
+
+    // Still open for writing: the descriptor now names the new path.
+    pinfo_rebind_write(pi, from->outname, newpath, abspath);
 }
 
 // A hardlink creates a new name for the same inode: the new path has the exact
@@ -514,6 +609,9 @@ handle_link_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
     record_hash(to->outname, to->hash);
 
     record_hardlink(pi->outname, from->outname, to->outname);
+
+    // Still open for writing: further writes are new content at the old name.
+    pinfo_rebind_write(pi, from->outname, from->path, from->abspath);
 }
 
 // Record, once per process and kind, that this process used a mechanism able to
@@ -585,6 +683,7 @@ pinfo_new_tracee(PROCESS_INFO *self, pid_t pid, char ignore_one_sigstop)
 	memcpy(self->outname, leader->outname, sizeof self->outname);
 	self->declared = leader->declared;
 	self->is_thread = 1;
+	self->tgid = tgid;
     }
 }
 
@@ -640,11 +739,15 @@ reap_process(pid_t pid)
 	    if (!strcmp(process_state->finfo[j].outname, f->outname))
 		duplicate = 1;
 
-	if (duplicate)
+	if (duplicate || f->hash != NULL)
 	    continue;
 
 	f->hash = get_file_hash(f->abspath);
 	record_hash(f->outname, f->hash);
+
+	// As at close(): a later reader of this content must find this node,
+	// or it gets a writerless node of its own.
+	*next_finfo() = *f;
     }
 
     // A thread ending is not the process ending: the subject belongs to the

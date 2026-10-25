@@ -48,6 +48,7 @@ typedef struct {
     char ignore_one_sigstop;
     char declared;		       // `a b:process' already written out
     char is_thread;		       // shares its subject with the group leader
+    pid_t tgid;			       // its group leader, when is_thread
     unsigned int coverage_gaps;
 } PROCESS_INFO;
 
