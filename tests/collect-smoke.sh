@@ -126,3 +126,38 @@ else
     echo "skip: no static libz in this image"
 fi
 echo "ok: planted prebuilt archive is RED"
+
+# Go, where the image has it: no cgo, and still two ways in for a prebuilt.
+# A .syso in the package directory is linked in as it is, and a warm build
+# cache hands the linker packages compiled outside the trace.  The cold build
+# first: the tracer used to die on it, once Go's threads outgrew the first 32
+# slots of its process table.
+if command -v go >/dev/null 2>&1; then
+    export GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-mod=mod GOCACHE="$work/gocache"
+    mkdir -p "$work/gosrc" && cd "$work/gosrc"
+    printf 'module demo\n\ngo 1.21\n' > go.mod
+    printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("hi") }\n' > main.go
+    set +e
+    brec-collect -o "$work/gocold.tar.gz" --payload gdist -- go build -o gdist/demo . 2>/dev/null
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "a cold go build under the tracer exited $rc"
+    brec-collect -o "$work/gowarm.tar.gz" --payload wdist -- go build -o wdist/demo . 2>/dev/null
+    printf 'int planted_marker = 42;\n' > "$work/p.c"
+    gcc -c "$work/p.c" -o "planted_$(go env GOARCH).syso"
+    rm -rf "$GOCACHE"
+    brec-collect -o "$work/gosyso.tar.gz" --payload sdist -- go build -o sdist/demo . 2>/dev/null
+    cd "$src"
+    for b in gowarm gosyso; do
+        set +e
+        python3 -m brec analyze "$work/$b.tar.gz" > "$work/$b.txt"
+        rc=$?
+        set -e
+        [ "$rc" -eq 1 ] || { cat "$work/$b.txt"; fail "$b did not make the verdict RED (exit $rc)"; }
+    done
+    grep -q 'GOCACHE' "$work/gowarm.txt" || fail "the warm-cache RED does not point at GOCACHE"
+    grep -q 'prebuilt: .*planted_.*\.syso' "$work/gosyso.txt" || fail "the RED does not name the .syso"
+    echo "ok: a warm Go build cache and a planted .syso are RED"
+else
+    echo "skip: no go in this image"
+fi

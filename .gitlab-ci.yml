@@ -83,7 +83,7 @@ collect-ubuntu:
     DEBIAN_FRONTEND: noninteractive
   before_script:
     - apt-get update -q
-    - apt-get install -y -q gcc make autoconf automake xxd libssl-dev python3 zlib1g-dev
+    - apt-get install -y -q gcc make autoconf automake xxd libssl-dev python3 zlib1g-dev golang-go
 
 # ── Release: what templates/brec.yml downloads ───────────────────────────────
 # On a v* tag: a static build-recorder (so it runs in any glibc or musl image

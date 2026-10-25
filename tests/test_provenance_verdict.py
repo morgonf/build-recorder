@@ -571,3 +571,22 @@ def test_rust_standard_library_is_toolchain_runtime(tmp_path):
     rep = _verdict(_link_out(tmp_path, std))
     assert rep.verdict == "GREEN"
     assert std in rep.runtime
+
+
+def test_a_go_syso_is_a_prebuilt(tmp_path):
+    """Go links a package's .syso objects in as they are, without cgo."""
+    rep = _verdict(_link_out(tmp_path, "/home/u/proj/planted_amd64.syso"))
+    assert rep.verdict == "RED"
+
+
+def test_a_warm_go_build_cache_is_a_prebuilt(tmp_path):
+    """A compiled package the linker takes from GOCACHE was compiled outside
+    this trace: to the trace it is a prebuilt, named or not."""
+    entry = "/root/.cache/go-build/02/" + "026ea442" * 8 + "-d"
+    rep = _verdict(_link_out(tmp_path, entry))
+    assert rep.verdict == "RED"
+    (f,) = [f for f in rep.findings if f.artifact.endswith("/app")]
+    assert f.foreign_leaves == [entry]
+    assert "GOCACHE" in f.reason
+    # The action records beside it are not code.
+    assert not pv.is_binary("/root/.cache/go-build/02/" + "026ea442" * 8 + "-a")

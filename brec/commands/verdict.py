@@ -80,7 +80,15 @@ from brec.provenance.registry import detect_backends
 _BIN_EXTS = frozenset({
     ".o", ".a", ".so", ".ko", ".dll", ".dylib", ".lib", ".obj",
     ".bin", ".elf", ".rlib", ".rmeta", ".class", ".jar",
+    # Go links a package's .syso files into the binary as they are, cgo or not.
+    ".syso",
 })
+
+# An output entry of the Go build cache: <GOCACHE>/0a/<sha256>-d.  It holds a
+# compiled package (or another action's output) under a content hash, with no
+# extension to recognise it by.  The "-a" entries beside it are action records,
+# not code.
+_GO_CACHE_RE = re.compile(r"/[0-9a-f]{2}/[0-9a-f]{64}-d$")
 
 # Copy-provenance edges written by the tracer as blank nodes (b:hardlink /
 # b:rename), which brec.model does not parse. E.g.:
@@ -96,7 +104,13 @@ _GAP_RE = re.compile(
 )
 
 
+def is_go_cache_entry(abspath: str) -> bool:
+    return _GO_CACHE_RE.search(abspath) is not None
+
+
 def is_binary(abspath: str) -> bool:
+    if is_go_cache_entry(abspath):
+        return True
     name = Path(abspath).name.lower()
     if is_shared_object_name(name):
         return True
@@ -620,9 +634,16 @@ def compute_verdict(
         if foreign:
             red += 1
             verdict_by_uri[furi] = "RED"
+            reason = "incorporates a prebuilt binary not built from source in this build"
+            if any(is_go_cache_entry(p) for p in foreign):
+                # Not necessarily planted, but not compiled where we watched:
+                # a warm cache is a prebuilt to this trace.  go build -a is no cure:
+                # on go 1.22 it still reads entries earlier builds left there.
+                reason += (" (Go build cache entries compiled outside this trace: "
+                           "build with an empty GOCACHE)")
             findings.append(Finding(
                 artifact=fn.abspath, verdict="RED",
-                reason="incorporates a prebuilt binary not built from source in this build",
+                reason=reason,
                 foreign_leaves=foreign,
             ))
         elif unattributed:
