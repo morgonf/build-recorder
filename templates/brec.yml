@@ -2,7 +2,7 @@
 # was made from source, with no prebuilt binary incorporated.
 #
 #   include:
-#     - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc2
+#     - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc3
 #       inputs:
 #         build_job: build
 #   build:
@@ -53,7 +53,7 @@ spec:
     version:
       # Kept equal to the tag by the release job: the binaries downloaded are
       # the ones built from this very template's commit.
-      default: 1.1.0-rc2
+      default: 1.1.0-rc3
     project:
       default: a.kuznetcov/build-recorder
 ---

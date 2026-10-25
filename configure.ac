@@ -3,7 +3,7 @@ dnl Copyright (C) 2022 Alexios Zavras
 dnl Copyright (C) 2022 Valasiadis Fotios
 dnl SPDX-License-Identifier: LGPL-2.1-or-later
 
-AC_INIT([Build Recorder], [1.1.0-rc2])
+AC_INIT([Build Recorder], [1.1.0-rc3])
 
 dnl Directories for auxiliary files and macros
 AC_CONFIG_AUX_DIR([build-aux])
