@@ -81,7 +81,7 @@ def test_file_node_to_dict_keys() -> None:
     assert set(d.keys()) == {
         "uri", "abspath", "name", "size", "git_blob_sha1",
         "dep_type", "rpm_name", "rpm_nevra",
-        "pkg_backend", "pkg_name", "pkg_version", "purl",
+        "pkg_backend", "pkg_name", "pkg_version", "purl", "kind",
     }
 
 

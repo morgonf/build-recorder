@@ -55,7 +55,7 @@ _IURI_RE = re.compile(r"^\s+b:(\w+)\s+((?::[a-zA-Z_]|_:)\w*)\s*[.;]?")
 # ── Predicates we store per node type ────────────────────────────────────────
 
 _FILE_STR  = frozenset({
-    "abspath", "name", "hash",
+    "abspath", "name", "hash", "kind",
     "dep_type", "rpm_name", "rpm_package",      # legacy enrichment predicates
     "pkg_backend", "pkg_name", "pkg_version", "purl",  # new generalised predicates
 })
@@ -270,6 +270,7 @@ def parse_out(path: Path) -> BuildGraph:
             pkg_name=pkg_name,
             pkg_version=pkg_version,
             purl=purl,
+            kind=d.get("kind", ""),
         )
 
     # ── Assemble ProcessNode objects ──────────────────────────────────────────

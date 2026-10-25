@@ -108,8 +108,8 @@ def is_go_cache_entry(abspath: str) -> bool:
     return _GO_CACHE_RE.search(abspath) is not None
 
 
-def is_binary(abspath: str) -> bool:
-    if is_go_cache_entry(abspath):
+def is_binary(abspath: str, kind: str = "") -> bool:
+    if kind in CODE_KINDS or is_go_cache_entry(abspath):
         return True
     name = Path(abspath).name.lower()
     if is_shared_object_name(name):
@@ -152,6 +152,118 @@ def runtime_matcher(patterns: Iterable[str]):
             fnmatch.fnmatchcase(abspath if "/" in p else name, p) for p in pats
         )
     return match
+
+
+# ── Content kinds, and who may write code ─────────────────────────────────────
+#
+# The tracer writes b:kind from a file's first bytes (src/hash.c).  A name is
+# not evidence: tar xzf vendor.tar.gz writes libfoo.a, and to the graph that
+# was a file this build produced, with a gzip file for its whole lineage.  So
+# a file whose content is code must come from a program that writes code from
+# source, or from a program that read code this build had already produced
+# (strip, install, cp, ranlib, cmd/go rewriting a build id).  Otherwise it was
+# unpacked or downloaded, and it is a prebuilt like any other.
+
+CODE_KINDS = frozenset({
+    "elf", "elf-rel", "elf-exec", "elf-dyn", "ar", "class",
+    "macho", "pe", "bitcode", "wasm",
+})
+# Of those, the code a linker or a packer copies into its output as it is.  An
+# executable or a shared object read by another process is that process's tool
+# or a reference resolved at run time.
+_INCORPORATED_KINDS = frozenset({"elf-rel", "ar", "class", "bitcode"})
+
+# Programs that write code from source text, by name.  A cross or versioned
+# name (x86_64-linux-gnu-gcc-13, clang-18) is matched by its last parts.
+DEFAULT_COMPILERS: tuple[str, ...] = (
+    # gcc and its back ends
+    "gcc", "g++", "cc", "c++", "gccgo", "gfortran",
+    "cc1", "cc1plus", "cc1obj", "cc1objplus", "f951", "go1", "gnat1", "d21",
+    "lto1", "lto-wrapper", "collect2",
+    # llvm
+    "clang", "clang++", "llc", "lld", "ld.lld", "lld-link", "wasm-ld",
+    "llvm-ar", "llvm-ranlib",
+    # binutils
+    "as", "gas", "ld", "ld.bfd", "ld.gold", "gold", "mold", "ld.mold",
+    "ar", "ranlib", "gcc-ar", "gcc-ranlib",
+    # other compilers and assemblers
+    "rustc", "nasm", "yasm", "tcc", "zig", "ldc2", "dmd", "gdc", "swiftc",
+)
+# Go's own tools have names too common to trust anywhere but in GOROOT.
+_GO_TOOLS = frozenset({"compile", "asm", "link", "pack", "cgo"})
+# javac runs inside a JVM: java writes class files, and only those (T4).
+_JVM = frozenset({"java", "javac"})
+
+_VERSION_SUFFIX = re.compile(r"-\d+(?:\.\d+)*$")
+
+
+def compiler_matcher(names: Iterable[str]):
+    """Predicate over (executable abspath, content kind): may it write that?"""
+    known = frozenset(names)
+
+    def match(exe: str, kind: str) -> bool:
+        name = Path(exe).name
+        if name in _JVM:
+            return kind == "class"
+        if name in _GO_TOOLS:
+            return "/pkg/tool/" in exe
+        if name in known:
+            return True
+        parts = _VERSION_SUFFIX.sub("", name).split("-")
+        return any("-".join(parts[i:]) in known for i in range(len(parts)))
+    return match
+
+
+# Where the toolchain lives: a program found here that the build did not write
+# is part of the trusted image (T1).  One run from anywhere else (the source
+# tree, ~/.m2, a module cache) is a prebuilt tool, and whatever it wrote was
+# derived from a binary, not from source.  --tool-root extends the list.
+DEFAULT_TOOL_ROOTS: tuple[str, ...] = (
+    "/usr/*", "/bin/*", "/sbin/*", "/lib/*", "/lib64/*", "/lib32/*",
+    "/libx32/*", "/opt/*", "*/.rustup/*", "*/.cargo/bin/*",
+)
+
+
+@dataclass
+class Toolchain:
+    compilers: tuple[str, ...] = DEFAULT_COMPILERS
+    roots: tuple[str, ...] = DEFAULT_TOOL_ROOTS
+
+
+# A read as it is opened, and a node's hash as its write is closed:
+#     :p3 b:reads :f20 .        :f21 b:hash "5c0e..." .
+_READ_RE = re.compile(r"^(:[A-Za-z_]\w*)\s+b:reads\s+(:[A-Za-z_]\w*)\s*[.;]")
+_HASH_RE = re.compile(r"^(:[A-Za-z_]\w*)\s+b:hash\s")
+
+
+@dataclass
+class IoOrder:
+    """Trace line of each process's first read of each file, and of the hash
+    of each node."""
+    reads: dict[tuple[str, str], int] = field(default_factory=dict)
+    hashed: dict[str, int] = field(default_factory=dict)
+
+
+def parse_io_order(path: Path) -> IoOrder:
+    """When each process first read each file, and when each write ended.
+
+    The tracer records an open as it happens and hashes a write when it is
+    closed, so the line order of these triples is the order of the events.
+    The open of a write says little: strip opens its temporary output before
+    it reads the input, and the bytes go in after.  The hash is the moment
+    the content was fixed.  brec.model keeps no order at all.
+    """
+    order = IoOrder()
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for n, line in enumerate(fh):
+            m = _READ_RE.match(line)
+            if m:
+                order.reads.setdefault((m.group(1), m.group(2)), n)
+                continue
+            m = _HASH_RE.match(line)
+            if m:
+                order.hashed.setdefault(m.group(1), n)
+    return order
 
 
 # ── Copy-edge parsing (supplements brec.model) ────────────────────────────────
@@ -319,6 +431,7 @@ class Finding:
     reason: str
     foreign_leaves: list[str] = field(default_factory=list)  # abspaths
     unattributed_leaves: list[str] = field(default_factory=list)  # abspaths
+    tool_leaves: list[str] = field(default_factory=list)  # prebuilt programs run, abspaths
 
 
 @dataclass
@@ -338,22 +451,25 @@ class Report:
     prebuilt_packages: dict[str, str] = field(default_factory=dict)
     # Toolchain runtime objects linked in (exempt by name), with their package.
     runtime: dict[str, str] = field(default_factory=dict)
+    # False for a trace without b:kind: unpacked code and prebuilt tools unchecked.
+    kinds_recorded: bool = True
 
-    def lineages(self) -> tuple[list[tuple[list[str], list[str]]], list[int]]:
-        """Distinct (foreign, unattributed) leaf lists, and each finding's index.
+    def lineages(self) -> tuple[list[tuple[list[str], list[str], list[str]]], list[int]]:
+        """Distinct (foreign, unattributed, tool) leaf lists, and each finding's index.
 
         Files one producer wrote share their lineage: on a Maven build ten
         thousand findings name the same few hundred jars, and spelling them out
         per finding made a 1 GB report.
         """
-        table: list[tuple[list[str], list[str]]] = []
-        seen: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
+        table: list[tuple[list[str], list[str], list[str]]] = []
+        seen: dict[tuple[tuple[str, ...], ...], int] = {}
         index: list[int] = []
         for f in self.findings:
-            k = (tuple(f.foreign_leaves), tuple(f.unattributed_leaves))
+            k = (tuple(f.foreign_leaves), tuple(f.unattributed_leaves),
+                 tuple(f.tool_leaves))
             if k not in seen:
                 seen[k] = len(table)
-                table.append((f.foreign_leaves, f.unattributed_leaves))
+                table.append((f.foreign_leaves, f.unattributed_leaves, f.tool_leaves))
             index.append(seen[k])
         return table, index
 
@@ -371,8 +487,8 @@ class Report:
                 for f, i in zip(self.findings, index)
             ],
             "lineages": [
-                {"foreign_leaves": fl, "unattributed_leaves": ul}
-                for fl, ul in table
+                {"foreign_leaves": fl, "unattributed_leaves": ul, "foreign_tools": tl}
+                for fl, ul, tl in table
             ],
             "coverage_gaps": [
                 {"process": g.proc, "kind": g.kind, "cmd": g.cmd}
@@ -382,6 +498,7 @@ class Report:
             "toolchain_runtime": [
                 {"path": p, "package": pkg} for p, pkg in self.runtime.items()
             ],
+            "content_kinds_recorded": self.kinds_recorded,
             "payload": self.payload.to_dict() if self.payload else None,
             "payload_findings": [
                 {"path": e.path, "verdict": e.status.upper(), "reason": e.reason}
@@ -486,12 +603,17 @@ def compute_verdict(
     gaps: list[CoverageGap] | None = None,
     payload: list[tuple[str, Path | None, str | None]] | None = None,
     runtime: Iterable[str] | None = None,
+    toolchain: Toolchain | None = None,
+    io_order: IoOrder | None = None,
 ) -> Report:
     """Classify every produced file; see the module docstring.
 
     *backends* only label findings with the package a prebuilt came from; they
     no longer decide anything.  *runtime* is the exemption list of toolchain
     runtime objects (DEFAULT_RUNTIME when None, nothing when empty).
+    *toolchain* names the programs that write code and where trusted tools
+    live; *io_order* (parse_io_order) tells a read before a write from one
+    after it, and without it any read counts as earlier.
     """
     files = graph.files
     procs = graph.procs
@@ -520,9 +642,13 @@ def compute_verdict(
     produced: set[str] = set(writer_procs) | set(copy_src)
 
     is_runtime = runtime_matcher(DEFAULT_RUNTIME if runtime is None else runtime)
-
-    # Leaves reached through a copy or a hardlink: the output *is* that file.
-    copied_leaves = {src for src in copy_src.values() if src not in produced}
+    toolchain = toolchain or Toolchain()
+    is_compiler = compiler_matcher(toolchain.compilers)
+    in_tool_root = runtime_matcher(toolchain.roots)
+    # A trace from a tracer that does not write b:kind cannot tell code from
+    # text by content: neither rule that needs it is applied, and the report
+    # says so.
+    kinds_recorded = any(fn.kind for fn in files.values())
 
     # Paths this build wrote at least once.  Content found at such a path is a
     # different question from content found anywhere else: see
@@ -541,19 +667,24 @@ def compute_verdict(
         and mpfr on every compile).  Only a copy or hardlink of one into the
         output ships it.
         """
-        if furi in produced:
+        if furi in produced and furi not in unpacked:
             return False
         fn = files.get(furi)
-        if fn is None or not is_binary(fn.abspath):
+        if fn is None or not is_binary(fn.abspath, fn.kind):
             return False
-        if is_shared_object_name(Path(fn.abspath).name) and furi not in copied_leaves:
-            return False
-        return True
+        if furi in copied_leaves:
+            return True
+        if fn.kind in CODE_KINDS:
+            return fn.kind in _INCORPORATED_KINDS
+        return not is_shared_object_name(Path(fn.abspath).name)
 
     def is_foreign_binary(furi: str) -> bool:
-        """A prebuilt not built here, at a path this build never wrote."""
+        """A prebuilt not built here, at a path this build never wrote, or
+        unpacked here (see is_unpacked() below)."""
         if not incorporated_binary(furi):
             return False
+        if furi in unpacked:
+            return True
         path = files[furi].abspath
         return path not in written_paths and not is_runtime(path)
 
@@ -574,7 +705,7 @@ def compute_verdict(
         this build was writing that path.  Calling it source-clean would be a
         guess.  It is the definition of GREY, and it is reported as such.
         """
-        if not incorporated_binary(furi):
+        if not incorporated_binary(furi) or furi in unpacked:
             return False
         return files[furi].abspath in written_paths
 
@@ -614,7 +745,7 @@ def compute_verdict(
     # Only to a write that was opened before the read: a prebuilt read first
     # and then rewritten in place with the same bytes would otherwise vouch
     # for itself.  Node order in the trace is creation order.
-    order = {uri: i for i, uri in enumerate(files)}
+    node_order = {uri: i for i, uri in enumerate(files)}
     produced_at: dict[tuple[str, str], str] = {}
     for furi in produced:
         fn = files.get(furi)
@@ -626,9 +757,83 @@ def compute_verdict(
         if fn is None or not fn.git_blob_sha1:
             return None
         twin = produced_at.get((fn.abspath, fn.git_blob_sha1))
-        if twin is None or order.get(twin, -1) > order.get(r, -1):
+        if twin is None or node_order.get(twin, -1) > node_order.get(r, -1):
             return None
         return twin
+
+    # ── Code nobody compiled: unpacked or downloaded ─────────────────────────
+    #
+    # A file whose content is code was written either by a program that
+    # writes code (DEFAULT_COMPILERS), or by one that had read, before the
+    # write was closed, code another process of this build produced: strip, install, cp,
+    # cmd/go rewriting a build id or filling its cache.  Anything else wrote
+    # bytes it did not make: tar, unzip, curl, a JVM unpacking a native tool,
+    # ccache serving a hit.  Such a file is a prebuilt, and it stays a leaf:
+    # the lineage of the process that wrote it says nothing about its bytes.
+    # Limit: a process that does both, read a build output and then unpack,
+    # counts as a rewriter (threat-model 7.3).
+    inf = float("inf")
+    code_read_at: dict[str, float] = {}
+
+    def first_code_read(p) -> float:
+        """Line of p's first read of code another process of this build wrote."""
+        if p.uri not in code_read_at:
+            best = inf
+            for r in p.reads:
+                t = r if r in produced else twin_of(r)
+                if t is None or getattr(files.get(t), "kind", "") not in CODE_KINDS:
+                    continue
+                if p in writer_procs.get(t, []):
+                    continue
+                at = io_order.reads.get((p.uri, r), -1) if io_order else -1
+                best = min(best, at)
+            code_read_at[p.uri] = best
+        return code_read_at[p.uri]
+
+    def is_unpacked(furi: str) -> bool:
+        fn = files.get(furi)
+        if fn is None or fn.kind not in CODE_KINDS:
+            return False
+        writers = writer_procs.get(furi, [])
+        if not writers:
+            return False                  # a copy: its source decides
+        for p in writers:
+            exes = [files[e].abspath for e in p.executables if e in files]
+            if any(is_compiler(x, fn.kind) for x in exes):
+                return False
+            wrote_at = io_order.hashed.get(furi) if io_order else None
+            read_at = first_code_read(p)
+            if read_at < inf and (wrote_at is None or read_at < wrote_at):
+                return False
+        return True
+
+    unpacked = {f for f in produced if is_unpacked(f)} if kinds_recorded else set()
+
+    # Leaves reached through a copy or a hardlink: the output *is* that file.
+    copied_leaves = {
+        src for src in copy_src.values() if src not in produced or src in unpacked
+    }
+
+    # ── Programs run: the tool is an input of what it writes ─────────────────
+    #
+    # A program the build wrote is followed like any other input, so a tool
+    # compiled here passes its lineage on and one unpacked here makes its
+    # outputs RED.  A program the build did not write is the trusted
+    # toolchain when it lies under a tool root, and a prebuilt tool when it
+    # does not: a binary from the source tree, ~/.m2 or a module cache.  A
+    # script is source text, and is neither.
+    foreign_tools: set[str] = set()
+    if kinds_recorded:
+        for p in procs.values():
+            for e in p.executables:
+                fn = files.get(e)
+                if fn is None:
+                    continue
+                if e in unpacked or (
+                    e not in produced and twin_of(e) is None
+                    and fn.kind in CODE_KINDS and not in_tool_root(fn.abspath)
+                ):
+                    foreign_tools.add(e)
 
     # The walk runs over producers, not files.  Every file one set of
     # processes wrote has the same inputs, so per-file leaf sets were the same
@@ -652,16 +857,26 @@ def compute_verdict(
             ins: set[str] = set()
             lvs: set[str] = set()
             for r in p.reads:
-                if r in produced:
+                if r in unpacked:
+                    lvs.add(r)
+                elif r in produced:
                     ins.add(file_key[r])
                     # A file that reads itself is its own earlier content; it
                     # stays a leaf, as it always was.
                     if p in writer_procs.get(r, []):
                         lvs.add(r)
                 elif (twin := twin_of(r)) is not None:
-                    ins.add(file_key[twin])
+                    if twin in unpacked:
+                        lvs.add(twin)
+                    else:
+                        ins.add(file_key[twin])
                 else:
                     lvs.add(r)
+            for e in p.executables:
+                if e in foreign_tools:
+                    lvs.add(e)
+                elif e in produced:
+                    ins.add(file_key[e])
             reads_of[p.uri] = (ins, lvs)
         return reads_of[p.uri]
 
@@ -669,7 +884,7 @@ def compute_verdict(
         k = file_key[furi]
         if furi in copy_src:                      # content is the copy source
             src = copy_src[furi]
-            if src in produced:
+            if src in produced and src not in unpacked:
                 inputs[k].add(file_key[src])
             else:
                 direct[k].add(src)
@@ -691,7 +906,7 @@ def compute_verdict(
     leaf_pkg: dict[str, str] = {}        # prebuilt abspath -> package, "" if none
     runtime_used: dict[str, str] = {}    # toolchain runtime abspath -> package
     verdict_by_uri: dict[str, str] = {}
-    classified: dict[int, tuple[list[str], list[str]]] = {}
+    classified: dict[int, tuple[list[str], list[str], list[str]]] = {}
     green = red = grey = 0
     real = 0
     # In graph order, not set order: the findings below are printed in the order
@@ -708,8 +923,11 @@ def compute_verdict(
         # Files of one producer share one leaf set: classify it once.
         # comp_leaves keeps every set alive, so its id() is stable.
         if id(ls) not in classified:
-            foreign_uris = [l for l in ls if is_foreign_binary(l)]
-            for l in foreign_uris:
+            tool_uris = [l for l in ls if l in foreign_tools]
+            foreign_uris = [
+                l for l in ls if is_foreign_binary(l) and l not in foreign_tools
+            ]
+            for l in foreign_uris + tool_uris:
                 leaf_pkg.setdefault(files[l].abspath, package_of(l))
             for l in ls:
                 if is_runtime_binary(l):
@@ -717,15 +935,32 @@ def compute_verdict(
             classified[id(ls)] = (
                 sorted(files[l].abspath for l in foreign_uris),
                 sorted(files[l].abspath for l in ls if is_unattributed_binary(l)),
+                sorted(files[l].abspath for l in tool_uris),
             )
-        foreign, unattributed = classified[id(ls)]
+        foreign, unattributed, tools = classified[id(ls)]
         written_through_gap = any(
             p.uri in gap_procs for p in writer_procs.get(furi, [])
         )
-        if foreign:
+        if furi in unpacked:
             red += 1
             verdict_by_uri[furi] = "RED"
-            reason = "incorporates a prebuilt binary not built from source in this build"
+            cmd = writer_procs[furi][0].cmd
+            leaf_pkg.setdefault(fn.abspath, package_of(furi))
+            findings.append(Finding(
+                artifact=fn.abspath, verdict="RED",
+                reason=f"{fn.kind} code written by a program that compiles nothing, "
+                       "from nothing this build compiled: unpacked or downloaded"
+                       + (f" (by: {cmd})" if cmd else ""),
+            ))
+        elif foreign or tools:
+            red += 1
+            verdict_by_uri[furi] = "RED"
+            reason = (
+                "incorporates a prebuilt binary not built from source in this build"
+                if foreign else
+                "written by, or from the output of, a prebuilt program: "
+                "not part of the toolchain and not built in this build"
+            )
             if any(is_go_cache_entry(p) for p in foreign):
                 # Not necessarily planted, but not compiled where we watched:
                 # a warm cache is a prebuilt to this trace.  go build -a is no cure:
@@ -736,6 +971,7 @@ def compute_verdict(
                 artifact=fn.abspath, verdict="RED",
                 reason=reason,
                 foreign_leaves=foreign,
+                tool_leaves=tools,
             ))
         elif unattributed:
             grey += 1
@@ -793,6 +1029,7 @@ def compute_verdict(
         findings=sorted(findings, key=lambda f: (f.verdict, f.artifact)),
         coverage_gaps=gaps, payload=pstats, payload_entries=pentries,
         prebuilt_packages=leaf_pkg, runtime=dict(sorted(runtime_used.items())),
+        kinds_recorded=kinds_recorded,
     )
 
 
@@ -941,6 +1178,10 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append(f"  coverage gaps: {len(rep.coverage_gaps)} process(es) used "
                      "I/O this tracer cannot observe; GREEN is not available")
 
+    if not rep.kinds_recorded:
+        lines.append("  content kinds: not in this trace (tracer before 1.1.0-rc5): "
+                     "code unpacked from archives and prebuilt tools are not detected")
+
     if rep.runtime:
         names = sorted({Path(p).name for p in rep.runtime})
         lines.append(f"  toolchain runtime linked in: {len(rep.runtime)} object(s), "
@@ -964,7 +1205,7 @@ def _format_report(rep: Report, out_path: str) -> str:
         lines.append("")
         lines.append(f"  {_BANNER[f.verdict]}  {f.artifact}")
         lines.append(f"      {f.reason}")
-        n = len(f.foreign_leaves) + len(f.unattributed_leaves)
+        n = len(f.foreign_leaves) + len(f.unattributed_leaves) + len(f.tool_leaves)
         if i in first_of and n > 1:
             lines.append(f"      ← the same {n} leaves as {first_of[i]}")
             continue
@@ -972,6 +1213,9 @@ def _format_report(rep: Report, out_path: str) -> str:
         for leaf in f.foreign_leaves:
             pkg = rep.prebuilt_packages.get(leaf)
             lines.append(f"      ← prebuilt: {leaf}" + (f"  [{pkg}]" if pkg else ""))
+        for leaf in f.tool_leaves:
+            pkg = rep.prebuilt_packages.get(leaf)
+            lines.append(f"      ← prebuilt tool: {leaf}" + (f"  [{pkg}]" if pkg else ""))
         for leaf in f.unattributed_leaves:
             lines.append(f"      ← unattributed: {leaf}")
 
@@ -996,6 +1240,7 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
                          "Every entry must trace to the graph.")
     ap.add_argument("--json", type=Path, default=None, help="write JSON report here")
     add_runtime_options(ap)
+    add_toolchain_options(ap)
 
 
 def add_runtime_options(ap: argparse.ArgumentParser) -> None:
@@ -1005,6 +1250,22 @@ def add_runtime_options(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--strict", action="store_true",
                     help="exempt nothing, not even the toolchain runtime "
                          "(crt*.o, libgcc.a, ...): every prebuilt object is RED")
+
+
+def add_toolchain_options(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--compiler", action="append", default=[], metavar="NAME",
+                    help="also trust the program NAME to write code it compiled "
+                         "from source; repeatable")
+    ap.add_argument("--tool-root", action="append", default=[], metavar="PATTERN",
+                    help="also trust programs whose path matches PATTERN (a path "
+                         "glob) as part of the toolchain; repeatable")
+
+
+def toolchain_from_args(args) -> Toolchain:
+    return Toolchain(
+        compilers=DEFAULT_COMPILERS + tuple(getattr(args, "compiler", []) or []),
+        roots=DEFAULT_TOOL_ROOTS + tuple(getattr(args, "tool_root", []) or []),
+    )
 
 
 def runtime_from_args(args) -> list[str]:
@@ -1028,7 +1289,9 @@ def run(args) -> int:
     payload = collect_payload(args.payload) if args.payload else None
 
     rep = compute_verdict(graph, copies, backends, gaps=gaps, payload=payload,
-                          runtime=runtime_from_args(args))
+                          runtime=runtime_from_args(args),
+                          toolchain=toolchain_from_args(args),
+                          io_order=parse_io_order(args.out_file))
 
     print(_format_report(rep, str(args.out_file)))
     if args.json:

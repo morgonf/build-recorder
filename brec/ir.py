@@ -35,6 +35,7 @@ class FileNode:
     pkg_name: str = ""     # canonical package name (from b:pkg_name or b:rpm_name)
     pkg_version: str = ""  # canonical version (from b:pkg_version or b:rpm_package NEVRA)
     purl: str = ""         # Package URL (from b:purl)
+    kind: str = ""         # content format by its first bytes (b:kind): elf-rel, ar, zip, ...; "" for text or unknown
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +51,7 @@ class FileNode:
             "pkg_name": self.pkg_name,
             "pkg_version": self.pkg_version,
             "purl": self.purl,
+            "kind": self.kind,
         }
 
     @classmethod
@@ -67,6 +69,7 @@ class FileNode:
             pkg_name=d.get("pkg_name", ""),
             pkg_version=d.get("pkg_version", ""),
             purl=d.get("purl", ""),
+            kind=d.get("kind", ""),
         )
 
 

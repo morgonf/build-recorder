@@ -628,3 +628,177 @@ def test_a_prebuilt_rewritten_with_its_own_bytes_is_not_vouched_for(tmp_path):
     write may be a copy of the prebuilt, so it proves nothing about it."""
     rep = _verdict(_reread_out(tmp_path, write_first=False))
     assert rep.verdict != "GREEN"
+
+
+# ── Content kinds: code nobody compiled, and the programs a build runs ───────
+
+def _kfile(uri, abspath, kind=""):
+    return _file(uri, abspath, Path(abspath).name) + (
+        f'{uri} b:kind "{kind}" .\n' if kind else "")
+
+
+def _kinds_out(tmp_path, body: str) -> Path:
+    """A trace with b:kind: cc1 and ld from /usr, main.c in the tree."""
+    p = tmp_path / "kinds.out"
+    p.write_text(
+        "@prefix : <http://build-recorder.org/data#> .\n"
+        + _kfile(":fcc1", "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1", "elf-exec")
+        + _kfile(":fld", "/usr/bin/x86_64-linux-gnu-ld.bfd", "elf-exec")
+        + _kfile(":ftar", "/usr/bin/tar", "elf-dyn")
+        + _kfile(":fmainc", "/home/u/proj/main.c")
+        + body
+    )
+    return p
+
+
+def _verdict_ordered(p: Path, **kw):
+    return _verdict(p, io_order=pv.parse_io_order(p), **kw)
+
+
+def test_an_archive_unpacked_from_a_tarball_is_a_prebuilt(tmp_path):
+    """tar writes libfoo.a: to the graph a file this build produced, its whole
+    lineage a gzip file.  Its content is code, and tar compiles nothing."""
+    p = _kinds_out(tmp_path,
+        _kfile(":ftgz", "/home/u/proj/vendor.tar.gz", "gzip")
+        + _kfile(":flib", "/home/u/proj/libfoo.a", "ar")
+        + _kfile(":fmaino", "/home/u/proj/main.o", "elf-rel")
+        + _kfile(":fapp", "/home/u/proj/app", "elf-dyn")
+        + ":ptar a b:process .\n:ptar b:executable :ftar .\n"
+        + ":ptar b:reads :ftgz .\n:ptar b:writes :flib .\n"
+        + ":pcc a b:process .\n:pcc b:executable :fcc1 .\n"
+        + ":pcc b:reads :fmainc .\n:pcc b:writes :fmaino .\n"
+        + ":pld a b:process .\n:pld b:executable :fld .\n"
+        + ":pld b:reads :fmaino .\n:pld b:reads :flib .\n:pld b:writes :fapp .\n")
+    rep = _verdict_ordered(p)
+    assert rep.verdict == "RED"
+    by = {f.artifact: f for f in rep.findings}
+    assert "unpacked" in by["/home/u/proj/libfoo.a"].reason
+    assert by["/home/u/proj/app"].foreign_leaves == ["/home/u/proj/libfoo.a"]
+    # main.o came from cc1, from source.
+    assert "/home/u/proj/main.o" not in by
+
+
+def _rewrite_out(tmp_path, read_first: bool) -> Path:
+    """strip opens app.stripped, reads app (linked here), and closes
+    app.stripped; *read_first* puts the read before the close in the trace.
+    The open comes first either way, as strip does it."""
+    out = (':fout a b:file .\n:fout b:abspath "/home/u/proj/app.stripped" .\n'
+           ':fout b:name "app.stripped" .\n')
+    opened = ":pstrip b:writes :fout .\n"
+    read = ":pstrip b:reads :fapp .\n"
+    closed = ':fout b:hash "' + "0f" * 20 + '" .\n:fout b:kind "elf-dyn" .\n'
+    return _kinds_out(tmp_path,
+        _kfile(":fstrip", "/usr/bin/strip", "elf-exec")
+        + _kfile(":fmaino", "/home/u/proj/main.o", "elf-rel")
+        + _kfile(":fapp", "/home/u/proj/app", "elf-dyn")
+        + ":pcc a b:process .\n:pcc b:executable :fcc1 .\n"
+        + ":pcc b:reads :fmainc .\n:pcc b:writes :fmaino .\n"
+        + ":pld a b:process .\n:pld b:executable :fld .\n"
+        + ":pld b:reads :fmaino .\n:pld b:writes :fapp .\n"
+        + ":pstrip a b:process .\n:pstrip b:executable :fstrip .\n"
+        + out + opened + (read + closed if read_first else closed + read))
+
+
+def test_a_rewrite_of_code_built_here_is_not_unpacking(tmp_path):
+    assert _verdict_ordered(_rewrite_out(tmp_path, read_first=True)).verdict == "GREEN"
+
+
+def test_code_read_after_the_write_explains_nothing(tmp_path):
+    """The write was closed before anything compiled here was read."""
+    rep = _verdict_ordered(_rewrite_out(tmp_path, read_first=False))
+    assert rep.verdict == "RED"
+    (f,) = [f for f in rep.findings if f.artifact.endswith("app.stripped")]
+    assert "unpacked" in f.reason
+
+
+def test_a_prebuilt_program_run_from_the_tree_taints_what_it_writes(tmp_path):
+    """./gen > gen.c: the shell opened gen.c, gen wrote it through the
+    descriptor it was handed (both edges are in the trace)."""
+    p = _kinds_out(tmp_path,
+        _kfile(":fsh", "/usr/bin/dash", "elf-dyn")
+        + _kfile(":fgen", "/home/u/proj/tools/gen", "elf-dyn")
+        + _kfile(":fgenc", "/home/u/proj/gen.c")
+        + _kfile(":fgeno", "/home/u/proj/gen.o", "elf-rel")
+        + ":psh a b:process .\n:psh b:executable :fsh .\n:psh b:writes :fgenc .\n"
+        + ":pgen a b:process .\n:pgen b:executable :fgen .\n"
+        + ":pgen b:reads :fmainc .\n:pgen b:writes :fgenc .\n"
+        + ":pcc a b:process .\n:pcc b:executable :fcc1 .\n"
+        + ":pcc b:reads :fgenc .\n:pcc b:writes :fgeno .\n")
+    rep = _verdict_ordered(p)
+    assert rep.verdict == "RED"
+    by = {f.artifact: f for f in rep.findings}
+    assert by["/home/u/proj/gen.c"].tool_leaves == ["/home/u/proj/tools/gen"]
+    assert by["/home/u/proj/gen.o"].tool_leaves == ["/home/u/proj/tools/gen"]
+    # Under --tool-root it is part of the toolchain.
+    tc = pv.Toolchain(roots=pv.DEFAULT_TOOL_ROOTS + ("/home/u/proj/tools/*",))
+    assert _verdict_ordered(p, toolchain=tc).verdict == "GREEN"
+
+
+def test_a_program_built_here_passes_its_lineage_on(tmp_path):
+    """gen compiled from source in this build, then run: GREEN.  The same gen
+    linked with a prebuilt archive makes what it writes RED."""
+    def out(extra_read: str) -> Path:
+        return _kinds_out(tmp_path,
+            _kfile(":fgenmain", "/home/u/proj/genmain.c")
+            + _kfile(":fgeno", "/home/u/proj/genmain.o", "elf-rel")
+            + _kfile(":fgen", "/home/u/proj/gen", "elf-dyn")
+            + _kfile(":fpre", "/home/u/proj/third_party/libpre.a", "ar")
+            + _kfile(":fout", "/home/u/proj/out.c")
+            + ":pcc a b:process .\n:pcc b:executable :fcc1 .\n"
+            + ":pcc b:reads :fgenmain .\n:pcc b:writes :fgeno .\n"
+            + ":pld a b:process .\n:pld b:executable :fld .\n"
+            + ":pld b:reads :fgeno .\n" + extra_read + ":pld b:writes :fgen .\n"
+            + ":pgen a b:process .\n:pgen b:executable :fgen .\n:pgen b:writes :fout .\n")
+    assert _verdict_ordered(out("")).verdict == "GREEN"
+    rep = _verdict_ordered(out(":pld b:reads :fpre .\n"))
+    (f,) = [f for f in rep.findings if f.artifact.endswith("out.c")]
+    assert f.foreign_leaves == ["/home/u/proj/third_party/libpre.a"]
+
+
+def test_an_archive_under_a_text_name_is_still_an_archive(tmp_path):
+    """cp libfoo.txt libfoo.a: by name the source is text, by content code."""
+    p = _kinds_out(tmp_path,
+        _kfile(":fcp", "/usr/bin/cp", "elf-dyn")
+        + _kfile(":ftxt", "/home/u/proj/libfoo.txt", "ar")
+        + _kfile(":flib", "/home/u/proj/libfoo.a", "ar")
+        + ":pcp a b:process .\n:pcp b:executable :fcp .\n"
+        + ":pcp b:reads :ftxt .\n:pcp b:writes :flib .\n")
+    rep = _verdict_ordered(p)
+    assert rep.verdict == "RED"
+
+
+def test_a_trace_without_kinds_says_what_it_cannot_check(tmp_path, out_file):
+    rep = _verdict(out_file)
+    assert rep.kinds_recorded is False
+    assert "content kinds: not in this trace" in pv._format_report(rep, "x")
+    assert rep.to_dict()["content_kinds_recorded"] is False
+
+
+@pytest.mark.parametrize("exe,kind,ok", [
+    ("/usr/bin/x86_64-linux-gnu-gcc-13", "elf-rel", True),
+    ("/usr/bin/x86_64-alt-linux-gcc-ar-14", "ar", True),
+    ("/usr/lib/llvm-18/bin/clang-18", "elf-rel", True),
+    ("/usr/libexec/gcc/x86_64-linux-gnu/13/lto-wrapper", "elf-rel", True),
+    ("/usr/lib/go-1.22/pkg/tool/linux_amd64/compile", "ar", True),
+    ("/home/u/proj/compile", "ar", False),       # Go's names count only in GOROOT
+    ("/usr/lib/jvm/java-21/bin/java", "class", True),
+    ("/usr/lib/jvm/java-21/bin/java", "elf-exec", False),  # a JVM unpacking a native tool
+    ("/usr/bin/tar", "ar", False),
+    ("/usr/bin/curl", "elf-exec", False),
+])
+def test_who_may_write_code(exe, kind, ok):
+    assert pv.compiler_matcher(pv.DEFAULT_COMPILERS)(exe, kind) is ok
+
+
+def test_code_a_process_wrote_itself_explains_nothing(tmp_path):
+    """curl writes a.so, reads it back, writes b.so: b.so was not made from
+    anything compiled here, whatever curl read of its own output."""
+    p = _kinds_out(tmp_path,
+        _kfile(":fcurl", "/usr/bin/curl", "elf-dyn")
+        + _kfile(":fa", "/home/u/proj/a.so", "elf-dyn")
+        + _kfile(":fb", "/home/u/proj/b.so", "elf-dyn")
+        + ":pcurl a b:process .\n:pcurl b:executable :fcurl .\n"
+        + ":pcurl b:writes :fa .\n:pcurl b:reads :fa .\n:pcurl b:writes :fb .\n")
+    rep = _verdict_ordered(p)
+    unpacked = {f.artifact for f in rep.findings if "unpacked" in f.reason}
+    assert unpacked == {"/home/u/proj/a.so", "/home/u/proj/b.so"}
