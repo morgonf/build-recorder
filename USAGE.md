@@ -317,7 +317,7 @@ brec analyze bundle.tar.gz --fail-on red        # GREY не валит шаг
 
 ```yaml
 include:
-  - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc3
+  - component: $CI_SERVER_FQDN/a.kuznetcov/build-recorder/brec@v1.1.0-rc4
     inputs:
       build_job: build          # обязательный
       # bundle: brec-bundle.tar.gz
