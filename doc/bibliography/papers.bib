@@ -53,6 +53,15 @@
   url           = {https://arxiv.org/abs/2402.08980},
   note          = {Artifact Dependency Graph по gitoid; ДВА подхода — compiler-based и build-tracing (bomsh/bomtrace, strace); embedding OID в артефакт (напр. @BOM в .class)}
 }
+@misc{sahay2026-sbomit,
+  author       = {Sahay, Sanchit},
+  title        = {Over the Shoulder: Improving SBOM Accuracy by Watching the Build},
+  howpublished = {Доклад на OpenSSF Community Day Europe, 06.10.2026},
+  year         = {2026},
+  month        = {10},
+  url          = {https://openssfcdeu2026.sched.com/event/2WCOj},
+  note         = {NYU Secure Systems Lab, проект OpenSSF SBOMit. Компонент witness-ebpf трассирует файловую и сетевую активность сборки и пишет её в in-toto attestations (Witness), утилита sbomit превращает их в SBOM (SPDX, CycloneDX). 98 проектов CNCF, медианные накладные расходы 12,4 %, исходники проектов не меняются. Статьи нет, известны аннотация доклада, код (https://github.com/sbomit/sbomit) и ранний прототип на strace (https://github.com/SBOMit/SBOMit-strace-prototype)}
+}
 
 % ============================================================
 % SBOM / enforcement
@@ -368,6 +377,16 @@
   url     = {https://www.nature.com/articles/s41598-025-29762-0},
   note    = {SBOM из исходного кода (объявления импортов), а не из pom.xml: структура external component tree, три фильтра (нативные для языка, внутрипроектные, неиспользуемые) и обрезка поддеревьев. 30 проектов на Java/Python/Scala, recall 99,8 %, раздутые зависимости устранены}
 }
+@misc{kim2026-ganadi,
+  author        = {Kim, Dongyeon and Woo, Seunghoon and Lee, Heejo},
+  title         = {GANADI: Uncovering C/C++ OSS Reuse Genealogies via Pivotal Function-Based Clustering to Enhance Supply Chain Security},
+  year          = {2026},
+  month         = {9},
+  eprint        = {2609.17018},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2609.17018},
+  note          = {Группа CENTRIS (Корейский университет). Генеалогия переиспользования C/C++ OSS через промежуточные проекты. Потомки кластеризуются по общим функциям, унаследованным от первоисточника (pivotal functions), затем внутри кластера выводится направление заимствования. 20 широко переиспользуемых проектов, более 1500 путей распространения, precision 84,85 %, recall 95,76 % (у прежних подходов recall не выше 23,21 %); 48 незакрытых уязвимостей, 23 исправлены после раскрытия}
+}
 
 % ============================================================
 % Идентификация компонентов: binary-level (unbuilt binaries)
@@ -490,6 +509,16 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2608.25122},
   note          = {Kestrel: опознание ML-KEM и ML-DSA в очищенном статически слинкованном бинаре по таблицам констант NTT, выведенным из публичных параметров схемы; recall 128 из 128 при нуле ложных на четырёх независимых реализациях. На 6 224 бинарях рабочей Linux-системы найдено 12 некаталогизированных программ с ML-KEM, включая OpenSSH и стек управления контейнерами}
+}
+@misc{li2026-bscout,
+  author        = {Li, Junlin and Huang, Jianjun and You, Wei and Liang, Bin},
+  title         = {Recall-Oriented Precise Binary-to-Source Function Matching},
+  year          = {2026},
+  month         = {10},
+  eprint        = {2610.23546},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2610.23546},
+  note          = {BScout сопоставляет бинарные функции с исходными для SCA. Позиции уже найденных совпадений добавляют кандидатов вне начальной выдачи эмбеддингов, обучение с учётом инлайнинга (одна бинарная функция из нескольких исходных), LLM отбирает и проверяет совпадения. На больших stripped-бинарях precision выше на 32 % и recall примерно в 2,9 раза выше, чем у BinaryAI и SBridge}
 }
 
 % ============================================================
@@ -633,7 +662,7 @@
   eprint        = {2607.22140},
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2607.22140},
-  note          = {77 092 разобранных SBOM корпуса Wild SBOMs: 52,9 % без единого ребра зависимостей (нарушение NTIA minimum elements), 8,8 % вырожденных (медианная доля изолированных компонентов 93 %), 38,3 % связных. Долю рёбер определяет генератор, а не описываемое ПО (0-100 % по инструментам); CycloneDX compositions использован в 0,10 % документов}
+  note          = {77 092 разобранных SBOM корпуса Wild SBOMs: 52,9 % без единого ребра зависимостей (нарушение NTIA minimum elements), 8,8 % вырожденных (медианная доля изолированных компонентов 93 %), 38,3 % связных. Долю рёбер определяет генератор, а не описываемое ПО (0-100 % по инструментам); CycloneDX compositions использован в 0,10 % документов. В v3 от 22.10.2026 исправлено, что инструмент Github Extractor, не выдающий рёбер никогда, принадлежит Fortress Information Security, а не GitHub (собственный экспортер GitHub встречается в 17 документах, в 16 из них рёбра есть); 46,5 % корпуса даёт одна генерирующая обвязка, без неё доля SBOM без рёбер 42,3 %}
 }
 
 @misc{bhuiyan2026-githubsboms,
@@ -656,6 +685,36 @@
   archivePrefix = {arXiv},
   url           = {https://arxiv.org/abs/2608.30708},
   note          = {ICSME 2026, Tool Demonstrations Track. Слияние выводов нескольких генераторов по PURL с приоритетным доопределением полей; 90 проектов, 9 языков, доля полностью покрытых полей SPDX 2.3 выше на 8 п.п., доля полностью отсутствующих ниже на 11 п.п. лучшего одиночного инструмента}
+}
+@misc{reichmann2026-cim,
+  author        = {Reichmann, Felix and Krane, Wolfgang and Naiakshina, Alena and Johns, Martin and Koch, Simon},
+  title         = {Poking Around in the Dark: Why a Shared Understanding of Components Matters},
+  year          = {2026},
+  month         = {6},
+  eprint        = {2606.02442},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2606.02442},
+  note          = {v3 от 29.09.2026. Систематика механизмов включения компонентов (Component Inclusion Mechanisms, CIM) по жизненному циклу ПО и проверка cdxgen, syft, trivy, ORT и Microsoft sbom-tool на эталоне для Python, Java, Go, PHP, Rust и C. Ни один инструмент не покрывает все CIM, пробелы общие для всех; по выводу авторов, с оценёнными инструментами SBOM уровня безопасности недостижим}
+}
+@misc{prado2026-sbomambiguity,
+  author        = {Prado, Alan and Zendra, Olivier and Boinot, Philippe and Barais, Olivier},
+  title         = {Mind the Gap: How SBOM Specification Ambiguities Lead to Divergent Software Bills of Materials. An Empirical Tool Study},
+  year          = {2026},
+  month         = {9},
+  eprint        = {2609.19920},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2609.19920},
+  note          = {Inria / Université de Rennes. Три распространённых генератора SBOM на более чем 3000 проектах JavaScript и Rust против эталона из lock-файлов. Расхождения по покрытию зависимостей и полноте в основном систематические, потому что их источник в разных допущениях о границах зависимостей, именовании, происхождении и представлении, а не в ошибках реализации. Вывод: выбор генератора сам становится источником необнаруженного несоответствия CRA}
+}
+@misc{li2026-scaagent,
+  author        = {Li, Chaofan and Xue, Zhengduo and Li, Chengxiang and Hu, Yutao and Wu, Yueming and Zou, Deqing},
+  title         = {From Component Snapshots to Lifecycle Traces: Agent-Based Software Composition Analysis},
+  year          = {2026},
+  month         = {9},
+  eprint        = {2609.18391},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2609.18391},
+  note          = {SCA-Agent, агент на LLM, восстанавливает трассу компонента через стадии Code, Build, Release, Deploy и Runtime (идентичность, версия, путь появления, распространение, конечное состояние). 105 проектов Java, JavaScript и Python; F1 по экспозиции уязвимостей 96,69 %, на 18,76 п.п. выше лучшего традиционного SCA}
 }
 
 % ============================================================
@@ -698,6 +757,16 @@
   doi       = {10.1109/DSN-W70714.2026.00051},
   url       = {https://lab.iisec.ac.jp/~suzaki_lab/PDF/DSN-HAP26_muto.pdf},
   note      = {Institute of Information Security, Йокогама; workshop HAP при DSN 2026. Фактические файловые обращения сборки измеряются ядерным Linux IMA, лог привязан к vTPM и аттестации AMD SEV-SNP внутри CVM; итог -- Build Chain Report, проверяемый без пересборки. Сборки Bazel: замедление 2--5,4 раза (7,83 -> 39,98 с; 165,32 -> 891,87 с)}
+}
+@inproceedings{wilde2026-teerepro,
+  author        = {Wilde, Annika and Gutfleisch, Marco and Reichmann, Felix and Chakraborty, Anirban and Yarom, Yuval and Sasse, M. Angela and Karame, Ghassan},
+  title         = {"They don't care about this": A Systematic Study of TEE Build Reproducibility in the Wild},
+  booktitle     = {Proc. ACM Conference on Computer and Communications Security (CCS)},
+  year          = {2026},
+  eprint        = {2609.11411},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2609.11411},
+  note          = {Рурский университет Бохума. Из 115 развёртываний TEE (Intel SGX, Intel TDX, AMD SEV) 91 % невоспроизводимы, у 80 % нет ни исходников, ни эталонной сборки. В интервью с 12 разработчиками приоритетом воспроизводимость назвал один. Кроме устранимых технических причин (метки времени в бинаре) препятствие в отсутствии контроля над окружением сборки при нескольких участниках. Венью по полю comment arXiv, страницы и DOI ещё не назначены}
 }
 
 @misc{asad2026-kettle,
