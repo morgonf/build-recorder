@@ -32,14 +32,12 @@ typedef struct {
 
 /*
  * For each (sub-)process we keep its pid,
- * the command line (including all the arguments)
  * the list of files that are currently open for writing,
  * and, while it's running, its current syscall number
  * and arguments.
  */
 typedef struct {
     char outname[16];
-    char *cmd_line;
     int *fds;
     FILE_INFO *finfo;
     int numfinfo;

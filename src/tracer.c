@@ -100,6 +100,10 @@ pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
 {
     static int pcount = 0;
 
+    // The table grows by reallocarray(), which leaves new slots uninitialised,
+    // and a reaped slot keeps the copy of its successor's pointers. Start from
+    // zero so no field carries over what the slot held before.
+    memset(self, 0, sizeof *self);
     sprintf(self->outname, ":p%d", pcount++);
     self->finfo_size = DEFAULT_FINFO_SIZE;
     self->numfinfo = -1;
@@ -648,7 +652,6 @@ reap_process(pid_t pid)
     if (!process_state->is_thread)
 	record_process_end(process_state->outname);
 
-    free(process_state->cmd_line);
     free(process_state->finfo);
     free(process_state->fds);
 
